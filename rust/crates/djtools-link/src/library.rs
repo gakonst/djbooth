@@ -118,6 +118,7 @@ impl LibraryValidationReport {
 pub(crate) struct NfsExports {
     pub files: HashSet<PathBuf>,
     pub paths: HashSet<PathBuf>,
+    pub aliases: HashMap<PathBuf, PathBuf>,
 }
 
 impl LibrarySnapshot {
@@ -156,7 +157,15 @@ impl LibrarySnapshot {
             .iter()
             .flat_map(|file| file.ancestors().map(Path::to_path_buf))
             .collect();
-        NfsExports { files, paths }
+        let aliases = files
+            .iter()
+            .map(|file| (crate::nfs::nfs_export_path(file), file.clone()))
+            .collect();
+        NfsExports {
+            files,
+            paths,
+            aliases,
+        }
     }
 
     pub fn from_rekordbox_master_db(
@@ -772,6 +781,16 @@ struct RawRekordboxTrack {
 }
 
 fn open_rekordbox_database(path: &Path) -> Result<Connection> {
+    let connection = open_rekordbox_connection(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    connection
+        .execute_batch(
+            "PRAGMA query_only = ON; PRAGMA temp_store = MEMORY; PRAGMA cache_size = -65536;",
+        )
+        .context("failed to configure the read-only Rekordbox prewarm connection")?;
+    Ok(connection)
+}
+
+pub(crate) fn open_rekordbox_connection(path: &Path, flags: OpenFlags) -> Result<Connection> {
     let mut header = [0u8; SQLITE_HEADER.len()];
     File::open(path)
         .with_context(|| format!("failed to open Rekordbox database '{}'", path.display()))?
@@ -782,16 +801,8 @@ fn open_rekordbox_database(path: &Path) -> Result<Connection> {
                 path.display()
             )
         })?;
-    let connection = Connection::open_with_flags(
-        path,
-        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )
-    .with_context(|| {
-        format!(
-            "failed to open Rekordbox database '{}' read-only",
-            path.display()
-        )
-    })?;
+    let connection = Connection::open_with_flags(path, flags | OpenFlags::SQLITE_OPEN_NO_MUTEX)
+        .with_context(|| format!("failed to open Rekordbox database '{}'", path.display()))?;
     connection
         .busy_timeout(Duration::from_secs(5))
         .context("failed to configure the Rekordbox SQLite busy timeout")?;
@@ -813,15 +824,6 @@ fn open_rekordbox_database(path: &Path) -> Result<Connection> {
                 path.display()
             )
         })?;
-    connection
-        .execute_batch(
-            "
-            PRAGMA query_only = ON;
-            PRAGMA temp_store = MEMORY;
-            PRAGMA cache_size = -65536;
-            ",
-        )
-        .context("failed to configure the read-only Rekordbox prewarm connection")?;
     Ok(connection)
 }
 
@@ -1438,6 +1440,39 @@ mod tests {
         let key = default_rekordbox_database_key().expect("built-in database key");
         assert!(!key.is_empty());
         assert!(key.is_ascii());
+    }
+
+    #[test]
+    fn history_supports_encrypted_databases_without_making_the_library_reader_writable() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("master.db");
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .pragma_update(None, "key", default_rekordbox_database_key().unwrap())
+            .unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE djmdContent (ID TEXT PRIMARY KEY, rb_local_deleted INTEGER);",
+            )
+            .unwrap();
+        drop(connection);
+        let history = crate::history::PlaybackHistory::open(&path, 17).unwrap();
+        assert!(history.entries().unwrap().is_empty());
+        drop(history);
+        assert!(
+            crate::history::PlaybackHistory::open(&path, 17)
+                .unwrap()
+                .entries()
+                .unwrap()
+                .is_empty()
+        );
+        let reader = open_rekordbox_database(&path).unwrap();
+        assert!(
+            reader
+                .execute("INSERT INTO djmdContent VALUES ('42', 0)", [])
+                .is_err()
+        );
+        assert_ne!(&std::fs::read(&path).unwrap()[..16], SQLITE_HEADER);
     }
 
     #[test]

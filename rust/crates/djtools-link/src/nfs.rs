@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Instant, UNIX_EPOCH};
 
+use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tracing::{trace, warn};
 
@@ -43,6 +44,9 @@ pub(crate) const NFSERR_STALE: u32 = 70;
 #[allow(async_fn_in_trait)]
 pub(crate) trait NfsContext {
     fn bind_ip(&self) -> Ipv4Addr;
+    async fn nfs_resolve_child(&self, parent: &Path, name: &str) -> PathBuf {
+        resolve_child_path(parent, name).await
+    }
     async fn nfs_handle_for_path(&self, path: &Path, parent_fh: Option<&[u8]>) -> Option<Vec<u8>>;
     async fn nfs_path_for_handle(&self, fh: &[u8]) -> Option<PathBuf>;
     async fn nfs_read_chunk(
@@ -57,6 +61,10 @@ pub(crate) trait NfsContext {
 impl<T: NfsContext + ?Sized> NfsContext for Arc<T> {
     fn bind_ip(&self) -> Ipv4Addr {
         self.as_ref().bind_ip()
+    }
+
+    async fn nfs_resolve_child(&self, parent: &Path, name: &str) -> PathBuf {
+        self.as_ref().nfs_resolve_child(parent, name).await
     }
 
     async fn nfs_handle_for_path(&self, path: &Path, parent_fh: Option<&[u8]>) -> Option<Vec<u8>> {
@@ -182,6 +190,17 @@ pub(crate) fn portmap_getport(req_prog: u32, req_vers: u32, req_prot: u32, mount
     } else {
         0
     }
+}
+
+/// One component avoids decks repeatedly walking the host's entire sandbox path.
+/// Bind the alias to the file path, not a track ID that a later generation can reuse.
+pub(crate) fn nfs_export_path(path: &Path) -> PathBuf {
+    let digest = Sha256::digest(path.as_os_str().as_encoded_bytes());
+    let mut alias = PathBuf::from(format!("/djbooth-{digest:x}"));
+    if let Some(extension) = path.extension() {
+        alias.set_extension(extension);
+    }
+    alias
 }
 
 pub(crate) async fn resolve_child_path(parent: &Path, name: &str) -> PathBuf {
@@ -471,7 +490,7 @@ pub(crate) async fn nfs2_lookup<C: NfsContext + ?Sized>(
     let Some(parent) = ctx.nfs_path_for_handle(parent_fh).await else {
         return Some(stale_reply(xid, false));
     };
-    let child = resolve_child_path(&parent, &name).await;
+    let child = ctx.nfs_resolve_child(&parent, &name).await;
     let mut reply = rpc_reply_header(xid);
     if !tokio::fs::try_exists(&child).await.unwrap_or(false) {
         reply.extend_from_slice(&NFSERR_NOENT.to_be_bytes());
@@ -566,7 +585,7 @@ pub(crate) async fn nfs3_lookup<C: NfsContext + ?Sized>(
     let Some(parent) = ctx.nfs_path_for_handle(&parent_fh).await else {
         return Some(stale_reply(xid, true));
     };
-    let child = resolve_child_path(&parent, &name).await;
+    let child = ctx.nfs_resolve_child(&parent, &name).await;
     let mut reply = rpc_reply_header(xid);
     if !tokio::fs::try_exists(&child).await.unwrap_or(false) {
         reply.extend_from_slice(&NFSERR_NOENT.to_be_bytes());

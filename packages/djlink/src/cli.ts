@@ -105,6 +105,7 @@ const loadOutput = z.object({
   loaded: z.literal(true),
   playing: z.boolean(),
   transportNote: z.string(),
+  transportError: z.string().nullable().optional(),
 });
 
 const prepareOutput = loadOutput.extend({
@@ -148,20 +149,30 @@ const refreshOutput = z.object({
   changed: z.boolean(),
 });
 
+const playerNumber = z
+  .number()
+  .int()
+  .min(1)
+  .max(12)
+  .refine((value) => value <= 6 || value >= 11, "Use CDJ player 1–6 or OMNIS status ID 11/12");
+const loadPlayer = playerNumber
+  .default(3)
+  .describe("CDJ player 1–6, or OMNIS deck 1/2 (also 11/12); standalone players take precedence");
+
 export const djlinkCli = Cli.create("djlink", {
   version: DJLINK_VERSION,
   description:
     "Serve compatible master.db content or acquired djbooth recordings to CDJs over Pro DJ Link.",
-  hint: "Start the full browsable library: djlink link. Add a track selector to validate, start, discover, load, and play it in one shot.",
+  hint: "Start the full browsable library: djlink link. Add a track selector to validate, start, discover, and load it. OMNIS remote Play is unverified; use the physical Play button.",
   mcp: {
     instructions:
-      "Use link with no positional track to expose the complete auto-discovered master.db hierarchy directly and read-only. Use link <track> for a one-shot database-to-deck load and play. Use run <manifest> <track> only for developer diagnosis of recordings not yet imported. Use search <query> to verify the exact prewarmed RemoteDB matcher and row builder independently from CDJ Search UI activation. After a passing preflight, inspect TCP/1051: CDJ-3000 keyboard edits emit incremental 0x1500; legacy players may emit 0x1300. A reconnect after every keystroke means the server rejected Search; no request means the deck never activated it. The native daemon prewarms metadata and playlist membership, serves local audio plus ANLZ, and never streams Spotify audio. If an active interface yields no announcements, probe a known deck IP before changing protocol code.",
+      "Use link with no positional track to expose the complete auto-discovered master.db hierarchy. Library metadata is read-only; playback history is saved in the djbooth_play_history extension table inside master.db. The deck's History menu shows daily lists in first-play order, with one entry per track per local calendar day. Loads and pauses are not plays. History survives reconnects and source restarts. Use link <track> for a one-shot database-to-deck load. OMNIS accepts deck 1/2 or status IDs 11/12, but remote Play is unverified: check loaded, playing, and transportError separately and use the physical Play button. Use run <manifest> <track> only for developer diagnosis of recordings not yet imported. Use search <query> to verify the exact prewarmed RemoteDB matcher and row builder independently from CDJ Search UI activation. After a passing preflight, inspect TCP/1051: CDJ-3000 keyboard edits emit incremental 0x1500; legacy players may emit 0x1300. A reconnect after every keystroke means the server rejected Search; no request means the deck never activated it. The native daemon prewarms metadata and playlist membership, serves local audio plus ANLZ, and never streams Spotify audio. If an active interface yields no announcements, probe a known deck IP before changing protocol code.",
   },
 });
 
 export const linkCli = Cli.create("link", {
   description:
-    "Validate and serve the complete read-only master.db library; verify discovery and optionally cue one track.",
+    "Serve the master.db library and persist daily playback history; verify discovery and optionally cue one track.",
   hint: "No track argument performs validate → start/resume → discover and exposes folders, playlists, artists, albums, and tracks. A track adds resolve → cue. One command either returns visible decks or a network CTA.",
   args: z.object({
     track: z
@@ -185,7 +196,7 @@ export const linkCli = Cli.create("link", {
       .boolean()
       .default(false)
       .describe("Refresh the running library without restarting DJ Link or changing playback"),
-    player: z.number().int().min(1).max(6).default(3).describe("Target CDJ player number"),
+    player: loadPlayer,
     playerNumber: z
       .number()
       .int()
@@ -274,8 +285,8 @@ djlinkCli.command("doctor-rekordbox", {
 
 djlinkCli.command("run", {
   description:
-    "Validate a completed manifest, start or resume its source, discover one CDJ, then load and play a track.",
-  hint: "This is the one-shot manifest-to-deck handoff. It never streams Spotify audio and confirms playback from CDJ status.",
+    "Validate a completed manifest, start or resume its source, discover a deck, then load a track.",
+  hint: "This is the one-shot manifest-to-deck handoff. It never streams Spotify audio and confirms playback from CDJ status. OMNIS remote Play is unverified; use the physical Play button.",
   args: z.object({
     manifest: z.string().min(1).describe("Completed music tracks manifest"),
     track: z
@@ -293,7 +304,7 @@ djlinkCli.command("run", {
     broadcastIp: z.string().optional().describe("DJ Link broadcast IPv4 address; auto-derived"),
     intervalMs: z.number().int().min(10).max(5_000).default(250),
     name: z.string().min(1).default("music").describe("Source name shown on the CDJ"),
-    player: z.number().int().min(1).max(6).default(3).describe("Target CDJ player number"),
+    player: loadPlayer,
     playerNumber: z
       .number()
       .int()
@@ -468,7 +479,8 @@ djlinkCli.command("probe", {
 });
 
 djlinkCli.command("load", {
-  description: "Resolve, load, and play one track from the running Rekordbox or manifest source.",
+  description: "Resolve and load one track from the running Rekordbox or manifest source.",
+  hint: "CDJs also attempt Play. OMNIS remote Play is unverified; use the physical Play button. A successful load does not imply playback: inspect playing and transportError.",
   args: z.object({
     track: z
       .string()
@@ -477,7 +489,7 @@ djlinkCli.command("load", {
   }),
   options: z.object({
     intervalMs: z.number().int().min(10).max(5_000).default(250),
-    player: z.number().int().min(1).max(6).default(3).describe("Target CDJ player number"),
+    player: loadPlayer,
     repeat: z
       .number()
       .int()
@@ -566,9 +578,9 @@ djlinkCli.command("search", {
 });
 
 djlinkCli.command("monitor", {
-  description: "Read the latest compact status, beat, and position telemetry for one CDJ.",
+  description: "Read the latest compact status, beat, and position telemetry for one deck.",
   options: z.object({
-    player: z.number().int().min(1).max(6).default(3),
+    player: playerNumber.default(3).describe("CDJ player 1–6, or OMNIS status ID 11/12"),
   }),
   output: z.object({
     player: z.number().int(),

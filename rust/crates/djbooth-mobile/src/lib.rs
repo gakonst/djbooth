@@ -346,7 +346,7 @@ fn request(operation: &str, input: &str) -> Result<Value> {
                 .build()?;
             let server = runtime.block_on(async {
                 let config = DjLinkConfig {
-                    source_name: "DJ Booth iPhone".into(),
+                    source_name: "djbooth-phone".into(),
                     model_name: "rekordbox".into(),
                     player_number: djtools_link::REKORDBOX_PLAYER_NUMBER,
                     bind_ip: Some(bind_ip),

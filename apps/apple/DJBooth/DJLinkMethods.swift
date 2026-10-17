@@ -10,6 +10,10 @@ enum DJLinkServerMethod: String, CaseIterable, Sendable {
     case `stagehand_protocol_nonce`
     case `library_track_count`
     case `library_playlist_count`
+    case `library_counts`
+    case `set_history`
+    case `history`
+    case `refresh_library`
     case `resolve_library_track`
     case `library_track_metadata`
     case `library_waveform`

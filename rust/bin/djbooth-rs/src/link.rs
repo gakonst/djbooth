@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
+use djtools_link::history::PlaybackHistory;
 use djtools_link::{
     DEFAULT_MOUNT_PORT, DjLinkConfig, DjLinkSearchMode, DjLinkServer, LibrarySnapshot, LogLevel,
     PlaylistRecord, REKORDBOX_PLAYER_NUMBER, RekordboxLibraryLoadReport, RemoteDbCursorAudit,
@@ -90,6 +91,9 @@ struct ServeArgs {
     /// Write every successfully injected raw-BPF Ethernet frame to a fresh libpcap file.
     #[arg(long)]
     wire_pcap: Option<PathBuf>,
+    /// Record bounded application socket payloads, including kernel sends and pre-parser receives.
+    #[arg(long)]
+    diagnostics_dir: Option<PathBuf>,
     #[arg(long, default_value = "info")]
     log_level: String,
     #[arg(long)]
@@ -1072,6 +1076,28 @@ async fn serve(args: ServeArgs) -> Result<()> {
         load_payload_byte_overrides: Vec::new(),
     };
     let mut server = DjLinkServer::new(config, library).await?;
+    if let Some(root) = &args.diagnostics_dir {
+        // Initialize after the server's tracing subscriber, but before starting
+        // its sockets. Keep --log-path/--log-level behavior unchanged.
+        djtools_link::diagnostics::initialize(
+            &std::path::absolute(root)?,
+            &format!("serve-{}", std::process::id()),
+            json!({"runtime": "djbooth-rs", "version": env!("CARGO_PKG_VERSION")}),
+        )?;
+    }
+    let history = if let Some(path) = args.library.rekordbox_db.clone() {
+        let player = server.player_number();
+        let (history, entries) = tokio::task::spawn_blocking(move || {
+            let history = PlaybackHistory::open(&path, player)?;
+            let entries = history.entries()?;
+            Ok::<_, anyhow::Error>((history, entries))
+        })
+        .await??;
+        server.set_history(entries);
+        Some((history, server.subscribe_telemetry()))
+    } else {
+        None
+    };
     let mut telemetry_events = server.subscribe_telemetry();
     let mut mixer_telemetry_events = server.subscribe_mixer_telemetry();
     let mut vu_telemetry_events = server.subscribe_vu_telemetry();
@@ -1117,6 +1143,10 @@ async fn serve(args: ServeArgs) -> Result<()> {
     })
     .await?;
     state_api.publisher().refresh_decks(&server).await?;
+    let (history_stop, history_shutdown) = tokio::sync::oneshot::channel();
+    let mut history_task = history.map(|(history, events)| {
+        tokio::spawn(history.run(server.clone(), events, history_shutdown))
+    });
     println!(
         "{}",
         serde_json::to_string(&json!({
@@ -1132,6 +1162,7 @@ async fn serve(args: ServeArgs) -> Result<()> {
             "tracks": runtime.tracks,
             "playlists": runtime.playlists,
             "wirePcap": args.wire_pcap,
+            "diagnostics": djtools_link::diagnostics::status(),
             "stateApi": format!("http://{}", state_api.address),
             "audioMeterDevice": audio_meter_device,
             "audioMeterRouting": null,
@@ -1193,6 +1224,10 @@ async fn serve(args: ServeArgs) -> Result<()> {
                 if let Some(Err(error)) = completed {
                     tracing::warn!(%error, "control_task_failed");
                 }
+            }
+            result = async { history_task.as_mut().expect("guarded history task").await }, if history_task.is_some() => {
+                tracing::error!(?result, "history_recorder_stopped");
+                history_task = None;
             }
             result = async {
                 midi_connect_task.as_mut().expect("guarded MIDI task").await
@@ -1372,6 +1407,13 @@ async fn serve(args: ServeArgs) -> Result<()> {
         }
     }
 
+    let _ = history_stop.send(());
+    if let Some(task) = history_task {
+        match task.await {
+            Ok(Ok(())) => {}
+            result => tracing::error!(?result, "history_shutdown_failed"),
+        }
+    }
     control_tasks.abort_all();
     while control_tasks.join_next().await.is_some() {}
     drop(stop_tx);
@@ -1451,6 +1493,7 @@ async fn dispatch_control(
             "remoteTransportSupported": true,
             "remoteDeckPreparationSupported": true,
         })),
+        "history" => Ok(json!({ "histories": server.history() })),
         "refreshLibrary" => refresh_library_source(server, runtime).await,
         "devices" => {
             let devices = server
@@ -1556,15 +1599,22 @@ async fn dispatch_control(
                     Duration::from_millis(params.interval_ms.max(10)),
                 )
                 .await?;
-            let playing = server.start_player(params.player, params.track_id).await?;
+            // Loading and transport are separate operations. In particular,
+            // all-in-one players can load but reject legacy fader-start IDs.
+            let playback = server.start_player(params.player, params.track_id).await;
+            let playing = playback.as_ref().copied().unwrap_or(false);
+            let transport_error = playback.err().map(|error| error.to_string());
             Ok(json!({
                 "player": params.player,
                 "trackId": params.track_id,
                 "packetsSent": sent,
                 "loaded": true,
                 "playing": playing,
+                "transportError": transport_error,
                 "transportNote": if playing {
                     "Track loaded and remote playback confirmed from CDJ status."
+                } else if transport_error.is_some() {
+                    "Track loaded, but remote playback failed; see transportError."
                 } else {
                     "Track loaded; Pro DJ Link and Stagehand transport commands were sent but the CDJ did not enter playback."
                 },

@@ -689,14 +689,19 @@ async function requireDjLinkDevices(
       server.sourceKind === "rekordbox" ? "complete Rekordbox source" : "verified manifest source";
     throw new DjLinkError(
       "DEVICE_NOT_FOUND",
-      `No CDJs announced on ${server.bindIp}; the ${source} remains running for retry`,
+      `No decks announced on ${server.bindIp}; the ${source} remains running for retry`,
     );
   }
   return devices;
 }
 
 function requireDjLinkPlayer(devices: DjLinkDevice[], player: number): void {
-  if (!devices.some((device) => device.playerNumber === player)) {
+  // Match the native loader: one OMNIS discovery identity represents both decks.
+  // Leave alias resolution and standalone-player precedence to the native runtime.
+  const omnisAlias =
+    [1, 2, 12].includes(player) &&
+    devices.some((device) => device.model.toUpperCase() === "OMNIS-DUO");
+  if (!omnisAlias && !devices.some((device) => device.playerNumber === player)) {
     throw new DjLinkError(
       "DEVICE_NOT_FOUND",
       `Player ${String(player)} was not discovered; available players: ${devices
@@ -765,6 +770,7 @@ type NativeLoadResult = {
   loaded: true;
   playing: boolean;
   transportNote: string;
+  transportError?: string | null;
 };
 
 type NativePrepareResult = Omit<DjLinkPrepareResult, "order" | "title" | "artist">;
