@@ -55,7 +55,6 @@
     "typecheck": "tsc --noEmit && cargo check --manifest-path src-tauri/Cargo.toml"
   },
   "dependencies": {
-    "@gakonst/dj-monitor": "workspace:*",
     "@gakonst/rekordbox": "workspace:*",
     "@gakonst/soundcloud": "workspace:*",
     "@gakonst/spots": "workspace:*",
@@ -68,6 +67,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@gakonst/dj-monitor": "workspace:*",
     "@tanstack/react-query": "^5.101.2",
     "@tauri-apps/api": "2.11.1",
     "@tauri-apps/cli": "2.11.4",
