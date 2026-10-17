@@ -166,7 +166,10 @@ export function resolveRekordboxPipelineLocation(
   const dbPath = resolve(configuredPath);
   return {
     dbPath,
-    dbDirectory: resolve(options.dbDirectory ?? configured?.dbDir ?? join(dbPath, "..")),
+    dbDirectory: resolve(
+      options.dbDirectory ??
+        (options.dbPath ? join(dbPath, "..") : (configured?.dbDir ?? join(dbPath, ".."))),
+    ),
   };
 }
 
