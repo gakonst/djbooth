@@ -11,6 +11,8 @@ const serveStatusOutput = z.discriminatedUnion("running", [
     pid: z.number().int().positive(),
     startedAt: z.string(),
     url: z.string(),
+    dbPath: z.string().nullable(),
+    pairingFile: z.string().nullable(),
     assistantEnabled: z.boolean(),
     logPath: z.string(),
     monitorUrl: z.string(),
@@ -31,6 +33,7 @@ const djLinkStatusOutput = z.discriminatedUnion("running", [
     running: z.literal(true),
     pid: z.number().int().positive(),
     sourcePath: z.string(),
+    sourceKind: z.enum(["rekordbox", "manifest"]),
     bindIp: z.string(),
     broadcastIp: z.string(),
     playerNumber: z.number().int().positive(),
@@ -68,37 +71,96 @@ const importStatusOutput = z.object({
   ),
 });
 
+const runtimeStatusOutput = z.object({
+  serve: serveStatusOutput,
+  link: djLinkStatusOutput,
+});
+
 export const statusCli = Cli.create("status", {
   description: "Report library readiness and managed service state for the next agent action.",
   options: z.object({
-    path: z.string().optional().describe("master.db path; defaults to auto-discovery"),
+    path: z
+      .string()
+      .optional()
+      .describe("master.db path; defaults to the active runtime, then auto-discovery"),
+    runtimeOnly: z
+      .boolean()
+      .default(false)
+      .describe("Discover managed services without opening or discovering a library"),
   }),
-  output: z.object({
-    dbPath: z.string(),
-    dbDirectory: z.string(),
-    writeEnabled: z.boolean(),
-    stats: z.object({
-      tracks: z.number(),
-      playlists: z.number(),
-      folders: z.number(),
-      analyzed: z.number(),
-      missingAnalysis: z.number(),
-      missingBpm: z.number(),
-      missingKey: z.number(),
+  output: z.union([
+    runtimeStatusOutput.extend({
+      dbPath: z.string(),
+      dbDirectory: z.string(),
+      writeEnabled: z.boolean(),
+      stats: z.object({
+        tracks: z.number(),
+        playlists: z.number(),
+        folders: z.number(),
+        analyzed: z.number(),
+        missingAnalysis: z.number(),
+        missingBpm: z.number(),
+        missingKey: z.number(),
+      }),
+      imports: importStatusOutput,
     }),
-    serve: serveStatusOutput,
-    link: djLinkStatusOutput,
-    imports: importStatusOutput,
-  }),
+    runtimeStatusOutput,
+  ]),
   async run(c) {
+    const [serve, link] = await Promise.all([statusDjBoothRuntime(), statusDjLink()]);
+    // Saved configuration identifies the web library even when Link is stopped.
+    // A manifest-backed Link source is never a master.db path.
+    const serveDatabasePath = serve.running
+      ? (serve.options.databasePath ??
+        (serve.link?.sourceKind === "rekordbox" ? serve.link.sourcePath : undefined))
+      : undefined;
+    const runtime = {
+      serve: serve.running
+        ? {
+            running: true as const,
+            pid: serve.pid,
+            startedAt: serve.startedAt,
+            url: serve.url,
+            dbPath: serveDatabasePath ?? null,
+            pairingFile: serve.pairingFile ?? null,
+            assistantEnabled: serve.assistantEnabled,
+            logPath: serve.logPath,
+            monitorUrl: serve.monitorUrl,
+            views: { library: serve.url, booth: serve.monitorUrl },
+            sonos: serve.sonos,
+          }
+        : serve,
+      link: link.running
+        ? {
+            running: true as const,
+            pid: link.pid,
+            sourcePath: link.sourcePath,
+            sourceKind: link.sourceKind,
+            bindIp: link.bindIp,
+            broadcastIp: link.broadcastIp,
+            playerNumber: link.playerNumber,
+            tracks: link.tracks,
+            playlists: link.playlists,
+            uptimeMs: link.uptimeMs,
+            libraryRefreshSupported: link.libraryRefreshSupported === true,
+            logPath: link.logPath,
+          }
+        : link,
+    };
+    if (c.options.runtimeOnly) return runtime;
+    const databasePath =
+      c.options.path ??
+      serveDatabasePath ??
+      (!serve.running && link.running && link.sourceKind === "rekordbox"
+        ? link.sourcePath
+        : undefined);
     const database = new MasterDatabase({
-      ...(c.options.path ? { path: c.options.path } : {}),
+      ...(databasePath ? { path: databasePath } : {}),
       playlistXml: false,
       readonly: true,
       unlock: true,
     });
     try {
-      const [serve, link] = await Promise.all([statusDjBoothRuntime(), statusDjLink()]);
       const library = {
         dbPath: database.path,
         dbDirectory: database.dbDirectory,
@@ -108,34 +170,7 @@ export const statusCli = Cli.create("status", {
       const imports = inspectRekordboxImports({ database }).imports;
       return {
         ...library,
-        serve: serve.running
-          ? {
-              running: true as const,
-              pid: serve.pid,
-              startedAt: serve.startedAt,
-              url: serve.url,
-              assistantEnabled: serve.assistantEnabled,
-              logPath: serve.logPath,
-              monitorUrl: serve.monitorUrl,
-              views: { library: serve.url, booth: serve.monitorUrl },
-              sonos: serve.sonos,
-            }
-          : serve,
-        link: link.running
-          ? {
-              running: true as const,
-              pid: link.pid,
-              sourcePath: link.sourcePath,
-              bindIp: link.bindIp,
-              broadcastIp: link.broadcastIp,
-              playerNumber: link.playerNumber,
-              tracks: link.tracks,
-              playlists: link.playlists,
-              uptimeMs: link.uptimeMs,
-              libraryRefreshSupported: link.libraryRefreshSupported === true,
-              logPath: link.logPath,
-            }
-          : link,
+        ...runtime,
         imports: {
           total: imports.length,
           active: imports.filter((item) => item.pending > 0).length,

@@ -192,6 +192,8 @@ export type TrackPlaylistMembership = {
 export type TrackDetail = TrackSummary & {
   /** Exact djmdContent.updated_at value used as the metadata compare-and-swap revision. */
   revision: string;
+  /** UTC creation time of this library entry, independent of later metadata edits. */
+  addedAt?: string;
   comment: string | null;
   isrc: string | null;
   releaseYear: number | null;

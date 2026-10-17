@@ -61,6 +61,7 @@ import { ProcessingJobManager } from "./processing-jobs.js";
 import { createResponsesCredentialProvider } from "./openai-auth.js";
 import { attachResponsesProxy } from "./responses-proxy.js";
 import { MountedUsbMediaService } from "./usb-media.js";
+import { startPairedLibrary } from "./pairing.js";
 
 const hostedMutationSchema = z.discriminatedUnion("type", [
   z.object({
@@ -250,6 +251,9 @@ export type LibraryServerOptions = {
   usbMountRoots?: string[];
   hardwareStateHost?: string;
   hardwareStatePort?: number;
+  shareHost?: string;
+  sharePort?: number;
+  pairingFile?: string;
 };
 
 export type RunningLibraryServer = {
@@ -258,6 +262,7 @@ export type RunningLibraryServer = {
   port: number;
   token: string;
   url: string;
+  pairingFile?: string;
 };
 
 const contentTypes: Readonly<Record<string, string>> = {
@@ -813,6 +818,8 @@ export async function startLibraryServer(
   const host = options.host ?? "127.0.0.1";
   if (host !== "127.0.0.1" && host !== "::1" && host !== "localhost")
     throw new TypeError("The djbooth.ai server only binds to a loopback address");
+  if (Boolean(options.shareHost) !== Boolean(options.pairingFile))
+    throw new TypeError("Paired sharing requires both --share-host and --pairing-file");
   const port = options.port ?? 4179;
   const hardwareStateHost = options.hardwareStateHost ?? "127.0.0.1";
   const hardwareStatePort = options.hardwareStatePort ?? 4182;
@@ -1286,7 +1293,17 @@ export async function startLibraryServer(
     ? attachResponsesProxy(server, { credentials: responsesCredentials })
     : { close: () => undefined };
 
+  let paired: Awaited<ReturnType<typeof startPairedLibrary>> | undefined;
   try {
+    if (options.shareHost && options.pairingFile) {
+      if (!(api instanceof RekordboxLibraryService))
+        throw new TypeError("Paired sharing requires the master.db library service");
+      paired = await startPairedLibrary(api, {
+        host: options.shareHost,
+        ...(options.sharePort === undefined ? {} : { port: options.sharePort }),
+        pairingFile: options.pairingFile,
+      });
+    }
     await new Promise<void>((resolveListen, reject) => {
       server.once("error", reject);
       server.listen(port, host, () => {
@@ -1295,6 +1312,7 @@ export async function startLibraryServer(
       });
     });
   } catch (error) {
+    await paired?.close();
     hardwareStateProxy.close();
     responsesProxy.close();
     clearInterval(heartbeat);
@@ -1354,6 +1372,7 @@ export async function startLibraryServer(
     port: address.port,
     token,
     url: `http://${displayHost}:${address.port}/`,
+    ...(paired ? { pairingFile: paired.pairingFile } : {}),
     close: () => {
       closePromise ??= new Promise<void>((resolveClose, reject) => {
         hardwareStateProxy.close();
@@ -1365,9 +1384,10 @@ export async function startLibraryServer(
         eventClients.clear();
         stopHostedJobEvents?.();
         stopProcessingJobEvents();
+        const pairedClosed = paired?.close().catch((error: unknown) => error);
         server.close((serverError) => {
           void (async () => {
-            let closeError: unknown = serverError;
+            let closeError: unknown = serverError ?? (await pairedClosed);
             try {
               if (ownsApi) api.close?.();
               if (ownsHosted) await hosted?.close?.();

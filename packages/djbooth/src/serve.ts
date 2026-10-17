@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 
 import {
   startLibraryServer,
+  rotateLibraryPairing,
   type LibraryServerOptions,
   type RunningLibraryServer,
 } from "@gakonst/djbooth-app";
@@ -36,6 +37,9 @@ export type DjBoothServerOptions = {
   port?: number;
   sonos?: string;
   sonosPort?: number;
+  shareHost?: string;
+  sharePort?: number;
+  pairingFile?: string;
 };
 
 export type RunningDjBoothServer = {
@@ -66,6 +70,18 @@ const defaultDependencies: DjBoothServerDependencies = {
 };
 
 const initialLinkStartAttempts = 3;
+
+export const pairingCli = Cli.create("pairing", {
+  description: "Manage private paired-library access without restarting DJ Link.",
+}).command("rotate", {
+  description:
+    "Revoke the old bearer and rewrite the private descriptor; admitted downloads may finish.",
+  options: z.object({ path: z.string().describe("Canonical library master.db path") }),
+  output: z.object({ pairingFile: z.string().nullable() }),
+  async run(context) {
+    return rotateLibraryPairing(context.options.path);
+  },
+});
 
 /** Start the browser workstation/API and the matching master.db DJ Link source as one runtime. */
 export async function startDjBoothServer(
@@ -103,6 +119,9 @@ export async function startDjBoothServer(
       host: options.host ?? "127.0.0.1",
       port: options.port ?? 4179,
       writeEnabled: true,
+      ...(options.shareHost ? { shareHost: options.shareHost } : {}),
+      ...(options.sharePort === undefined ? {} : { sharePort: options.sharePort }),
+      ...(options.pairingFile ? { pairingFile: options.pairingFile } : {}),
     });
     if (options.sonos) {
       if (options.link === false) throw new Error("Sonos output requires the DJ Link runtime");
@@ -238,6 +257,15 @@ export const serveCli = Cli.create("serve", {
       .optional()
       .describe("Virtual Rekordbox player number; preserve a running server, otherwise 17"),
     port: z.number().int().min(0).max(65_535).default(4179),
+    shareHost: z
+      .string()
+      .optional()
+      .describe("Opt-in paired-library TLS listener on this LAN IPv4 address"),
+    sharePort: z.number().int().min(0).max(65_535).default(4184),
+    pairingFile: z
+      .string()
+      .optional()
+      .describe("Private pairing descriptor destination; requires --share-host"),
     sonos: z
       .string()
       .min(1)
@@ -261,6 +289,7 @@ export const serveCli = Cli.create("serve", {
     monitorUrl: z.string(),
     pid: z.number().int().positive(),
     url: z.string(),
+    pairingFile: z.string().nullable(),
     views: z.object({ library: z.string(), booth: z.string() }),
     sonos: z
       .object({ room: z.string(), coordinatorIp: z.string(), streamUrl: z.string() })
@@ -281,6 +310,9 @@ export const serveCli = Cli.create("serve", {
         ? {}
         : { playerNumber: context.options.playerNumber }),
       port: context.options.port,
+      ...(context.options.shareHost ? { shareHost: context.options.shareHost } : {}),
+      sharePort: context.options.sharePort,
+      ...(context.options.pairingFile ? { pairingFile: context.options.pairingFile } : {}),
       ...(context.options.sonos ? { sonos: context.options.sonos } : {}),
       sonosPort: context.options.sonosPort,
     });
@@ -293,6 +325,7 @@ export const serveCli = Cli.create("serve", {
       monitorUrl: server.monitorUrl,
       pid: server.pid,
       url: server.url,
+      pairingFile: server.pairingFile ?? null,
       views: { library: server.url, booth: server.monitorUrl },
       sonos: server.sonos,
     };
