@@ -58,17 +58,17 @@ struct PlaybackWaveform: View {
 
     var body: some View {
         let timing = player.timing
-        let clock = player.mediaClock
+        let clock = display.isDeck ? (display.deckClock ?? PlaybackMediaClock(elapsed: display.deckPosition ?? 0)) : player.mediaClock
         let trackID = display.track?.id
         let content = cache.content?.trackID == trackID ? cache.content : nil
         let waveformDuration = content?.duration ?? 0
         let duration = waveformDuration > 0 ? waveformDuration : (display.isDeck ? (display.deckDuration ?? 0) : timing.duration)
-        let heldPosition = display.isDeck ? (display.deckPosition ?? 0) : player.scrubPosition
+        let heldPosition = display.isDeck ? nil : player.scrubPosition
         let currentPosition = heldPosition ?? clock.position()
         let hasWindow = (!display.isDeck || display.deckPosition != nil) && content?.grid?.centeredBarWindow(at: currentPosition, bars: 8, duration: duration) != nil
         let overview = reduceMotion || !hasWindow
         let preview = scrub.flatMap { $0.trackID == trackID && player.isScrubbing($0.id) ? $0 : nil }
-        let animated = !display.isDeck && timing.playing && scenePhase == .active && !overview && content != nil && heldPosition == nil
+        let animated = (display.isDeck ? display.deck?.playing == true : timing.playing) && scenePhase == .active && !overview && content != nil && heldPosition == nil
         let highContrast = contrast == .increased
         TimelineView(.animation(minimumInterval: 1.0 / 60.0, paused: !animated)) { _ in
             let position = heldPosition ?? clock.position()
@@ -239,10 +239,10 @@ struct PlaybackOverviewBackground: View {
     @Environment(\.scenePhase) private var scenePhase
     var body: some View {
         let content = cache.content?.trackID == display.track?.id ? cache.content : nil
-        let clock = player.mediaClock
-        let heldPosition = display.isDeck ? (display.deckPosition ?? 0) : player.scrubPosition
+        let clock = display.isDeck ? (display.deckClock ?? PlaybackMediaClock(elapsed: display.deckPosition ?? 0)) : player.mediaClock
+        let heldPosition = display.isDeck ? nil : player.scrubPosition
         let duration = display.isDeck ? (display.deckDuration ?? 0) : player.duration
-        let animated = !display.isDeck && player.timing.playing && scenePhase == .active && heldPosition == nil
+        let animated = (display.isDeck ? display.deck?.playing == true : player.timing.playing) && scenePhase == .active && heldPosition == nil
         let waveformOpacity = contrast == .increased ? 0.18 : 0.34
         Canvas { context, size in
             guard let content else { return }

@@ -1,8 +1,49 @@
 import { execFileSync } from "node:child_process";
-import { basename, extname } from "node:path";
+import { createHash, randomUUID } from "node:crypto";
+import { createReadStream } from "node:fs";
+import { copyFile, link, mkdir, realpath, rm } from "node:fs/promises";
+import { basename, dirname, extname, join, resolve } from "node:path";
 import { deflateSync, inflateSync } from "node:zlib";
 
 import { XMLBuilder, XMLParser } from "fast-xml-parser";
+
+/** Copy removable audio into immutable, content-addressed library storage. */
+export async function copyAudioToLibrary(source: string, directory: string): Promise<string> {
+  const digest = async (path: string): Promise<string> => {
+    const hash = createHash("sha256");
+    for await (const chunk of createReadStream(path)) hash.update(chunk);
+    return hash.digest("hex");
+  };
+  const sourcePath = await realpath(source);
+  const hash = await digest(sourcePath);
+  const destination = resolve(directory, hash, basename(sourcePath));
+  const verifyDestination = async () => {
+    if ((await digest(destination)) !== hash)
+      throw new Error(`Library copy differs from source; refusing to overwrite: ${destination}`);
+    return realpath(destination);
+  };
+  try {
+    return await verifyDestination();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  await mkdir(dirname(destination), { recursive: true });
+  const temporary = join(dirname(destination), `.${randomUUID()}.tmp`);
+  try {
+    await copyFile(sourcePath, temporary);
+    if ((await digest(temporary)) !== hash)
+      throw new Error(`Source changed while copying: ${sourcePath}`);
+    try {
+      // Publish only a complete copy, without replacing an existing library file.
+      await link(temporary, destination);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
+    return await verifyDestination();
+  } finally {
+    await rm(temporary, { force: true });
+  }
+}
 
 const blobKey = Buffer.from("657f48f84c437cc1", "ascii");
 const base85Alphabet = Buffer.from(

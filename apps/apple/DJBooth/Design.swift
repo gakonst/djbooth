@@ -145,8 +145,28 @@ struct TrackArtwork: View {
     let track: Track
     let model: BoothModel
     var size: CGFloat = 48
+    @State private var pairedImage: CGImage?
+    @State private var pairedImageTrackID: String?
     var body: some View {
-        if model.workstationTracks[track.id]?.artworkAvailable == true, model.workstationConnected, let id = track.localContentID, let workstation = model.workstation {
+        if track.id.hasPrefix("paired:") {
+            Group {
+                if let pairedImage, pairedImageTrackID == track.id {
+                    Image(pairedImage, scale: 1, label: Text("\(track.album ?? track.title) album artwork"))
+                        .resizable().scaledToFill()
+                        .accessibilityIdentifier("artwork.\(track.id)")
+                } else { RecordArtwork(seed: track.album ?? track.title, size: size) }
+            }
+            .frame(width: size, height: size).clipShape(RoundedRectangle(cornerRadius: 8))
+            .task(id: track.id + model.pairedMac.artworkVersion.uuidString) {
+                let cached = await model.pairedMac.artwork(track, from: model.audio)
+                guard !Task.isCancelled else { return }
+                pairedImage = cached
+                pairedImageTrackID = track.id
+                let refreshed = await model.pairedMac.artwork(track, from: model.audio, refresh: true)
+                guard !Task.isCancelled else { return }
+                pairedImage = refreshed
+            }
+        } else if model.workstationTracks[track.id]?.artworkAvailable == true, model.workstationConnected, let id = track.localContentID, let workstation = model.workstation {
             AsyncImage(url: workstation.endpoint.path("api", "artwork", id)) { image in image.resizable().scaledToFill() }
                 placeholder: { RecordArtwork(seed: track.album ?? track.title, size: size) }
                 .frame(width: size, height: size).clipShape(RoundedRectangle(cornerRadius: 8))

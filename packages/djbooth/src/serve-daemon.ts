@@ -25,6 +25,7 @@ let state: DjBoothRuntimeState = {
   logPath: paths.log,
   monitorUrl: server.boothUrl,
   sonos: server.sonos,
+  pairingFile: server.web.pairingFile ?? null,
 };
 await writeFile(paths.state, `${JSON.stringify(state)}\n`, { mode: 0o600 });
 

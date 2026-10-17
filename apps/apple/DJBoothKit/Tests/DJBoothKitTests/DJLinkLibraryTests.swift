@@ -111,6 +111,24 @@ import Testing
     #expect(Set(duplicateCollections.playlists.map(\.playlistId)).count == 3)
     #expect(duplicateCollections.playlists[1].tracks == [two, one, two])
     #expect(duplicateCollections.playlists[2].tracks == [one])
+    let pairedCollections = [
+        Collection(id: "paired-a", name: "First set", trackIDs: ["two", "one", "two"], folderPath: ["mac-root", "folder-a"]),
+        Collection(id: "paired-b", name: "Second set", trackIDs: ["one"], folderPath: ["mac-root", "folder-b"])
+    ]
+    let paired = try DJLinkLibrary.prepare(tracks: tracks, collections: pairedCollections, annotations: [:],
+        audioDirectory: audio, sessionDirectory: root.appendingPathComponent("Paired"),
+        folderNames: ["mac-root": "Studio Mac", "folder-a": "Sets", "folder-b": "Sets"], idForIdentity: fixtureID)
+    #expect(paired.playlists.map(\.name) == ["Studio Mac", "Sets", "First set", "Sets", "Second set"])
+    #expect(paired.playlists[1].playlistId != paired.playlists[3].playlistId)
+    #expect(paired.playlists[1].parentId == paired.playlists[3].parentId)
+    #expect(paired.playlists[2].parentId == paired.playlists[1].playlistId)
+    #expect(paired.playlists[4].parentId == paired.playlists[3].playlistId)
+    #expect(paired.playlists[2].tracks == [two, one, two])
+    let renamed = try DJLinkLibrary.prepare(tracks: tracks, collections: pairedCollections, annotations: [:],
+        audioDirectory: audio, sessionDirectory: root.appendingPathComponent("Renamed"),
+        folderNames: ["mac-root": "Renamed Mac", "folder-a": "New name"], idForIdentity: fixtureID)
+    #expect(renamed.playlists.map(\.playlistId) == paired.playlists.map(\.playlistId))
+    #expect(renamed.playlists.map(\.name) == ["Renamed Mac", "New name", "First set", "folder-b", "Second set"])
     let expanded = try DJLinkLibrary.prepare(tracks: tracks + [Track(id: "aaa", title: "Earlier", mediaHash: hash, mediaExtension: "mp3", analysis: analysis)],
         collections: [], annotations: [:], audioDirectory: audio, sessionDirectory: root.appendingPathComponent("Expanded"), idForIdentity: fixtureID)
     #expect(expanded.tracks.first { $0.canonicalName == "one" }?.trackId == one)
@@ -126,6 +144,24 @@ import Testing
     let omitted = try DJLinkLibrary.prepare(tracks: [absent, stale], collections: [], annotations: [:],
         audioDirectory: audio, sessionDirectory: root.appendingPathComponent("Omitted"), idForIdentity: fixtureID)
     #expect(omitted.tracks.isEmpty)
+
+    let coverHash = String(repeating: "c", count: 64)
+    let cover = audio.appendingPathComponent(coverHash + ".audio")
+    try Data("cover fixture".utf8).write(to: cover)
+    var withCover = Array(tracks.prefix(2))
+    withCover[0].artworkHash = coverHash
+    withCover[1].artworkHash = "../outside"
+    let covered = try DJLinkLibrary.prepare(tracks: withCover, collections: [], annotations: [:],
+        audioDirectory: audio, sessionDirectory: root.appendingPathComponent("Covered"), idForIdentity: fixtureID)
+    #expect(covered.tracks.map(\.trackId) == [one, two], "Cover updates must retain deck track identities")
+    #expect(covered.tracks[0].artworkId != 0)
+    #expect(covered.tracks[0].artworkUrl == cover.path)
+    #expect(covered.tracks[1].artworkId == 0 && covered.tracks[1].artworkUrl == nil)
+    try FileManager.default.removeItem(at: cover)
+    let evicted = try DJLinkLibrary.prepare(tracks: withCover, collections: [], annotations: [:],
+        audioDirectory: audio, sessionDirectory: root.appendingPathComponent("Covered"), idForIdentity: fixtureID)
+    #expect(evicted.tracks.map(\.trackId) == [one, two], "A missing cover must not remove playable music")
+    #expect(evicted.tracks.allSatisfy { $0.artworkId == 0 && $0.artworkUrl == nil })
 
     try FileManager.default.removeItem(at: root.appendingPathComponent("Session"))
     #expect(try Data(contentsOf: audio.appendingPathComponent(hash + ".audio")) == bytes)

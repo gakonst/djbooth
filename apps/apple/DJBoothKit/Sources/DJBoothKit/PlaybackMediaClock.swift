@@ -7,11 +7,15 @@ public struct PlaybackMediaClock: Sendable, Equatable {
     private let elapsed: Double
     private let duration: Double
     private let timing: PlaybackTiming?
+    private let rate: Double
+    private let extrapolationLimit: Double
     private var correction: Double = 0
     private var correctionDuration: Double = 1
 
-    public init(timebase: CMTimebase? = nil, elapsed: Double = 0, duration: Double = 0, timing: PlaybackTiming? = nil) {
+    public init(timebase: CMTimebase? = nil, elapsed: Double = 0, duration: Double = 0, timing: PlaybackTiming? = nil,
+                rate: Double = 1, extrapolationLimit: Double = .infinity) {
         self.timebase = timebase; self.elapsed = elapsed; self.duration = duration; self.timing = timing
+        self.rate = rate; self.extrapolationLimit = extrapolationLimit
     }
 
     public var hasTimebase: Bool { timebase != nil }
@@ -20,6 +24,7 @@ public struct PlaybackMediaClock: Sendable, Equatable {
         lhs.timebase === rhs.timebase && lhs.elapsed == rhs.elapsed && lhs.duration == rhs.duration
             && lhs.timing == rhs.timing && lhs.correction == rhs.correction
             && lhs.correctionDuration == rhs.correctionDuration
+            && lhs.rate == rhs.rate && lhs.extrapolationLimit == rhs.extrapolationLimit
     }
 
     /// Renderer positions can be quantized to whole seconds. Preserve the
@@ -81,7 +86,11 @@ public struct PlaybackMediaClock: Sendable, Equatable {
     public func position(at uptime: Double = ProcessInfo.processInfo.systemUptime) -> Double {
         let age = timing.map { max(0, uptime - $0.observedAt) } ?? 0
         let adjustment = correction * min(1, age / correctionDuration)
-        let measured = timebase.map { CMTimebaseGetTime($0).seconds } ?? timing.map { $0.position(at: uptime) + adjustment } ?? elapsed
+        let measured = timebase.map { CMTimebaseGetTime($0).seconds } ?? timing.map {
+            let delta = $0.playing ? min(age, extrapolationLimit) * rate : 0
+            let projected = $0.position(at: $0.observedAt) + delta
+            return ($0.duration > 0 ? min($0.duration, projected) : projected) + adjustment
+        } ?? elapsed
         let fallback = elapsed.isFinite ? max(0, elapsed) : 0
         let position = measured.isFinite ? max(0, measured) : fallback
         return duration.isFinite && duration > 0 ? min(duration, position) : position

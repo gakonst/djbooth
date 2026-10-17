@@ -8,6 +8,8 @@
     <string>$(DJBOOTH_OFFLINE_COLLECTION)</string>
     <key>NSMicrophoneUsageDescription</key>
     <string>Record the USB mixer audio alongside your deck and mixer timeline.</string>
+    <key>NSCameraUsageDescription</key>
+    <string>Scan your Mac’s DJBooth pairing code to access its music library securely.</string>
     <key>UIFileSharingEnabled</key><true/>
     <key>LSSupportsOpeningDocumentsInPlace</key><true/>
     <key>UIBackgroundModes</key>
@@ -15,7 +17,7 @@
     <key>AVInitialRouteSharingPolicy</key>
     <string>LongFormAudio</string>
     <key>NSLocalNetworkUsageDescription</key>
-    <string>Find CDJs and Sonos speakers on your local network to play your music.</string>
+    <string>Connect to your paired Mac library, CDJs, and Sonos speakers on your local network.</string>
     <key>NSAppTransportSecurity</key>
     <dict><key>NSAllowsLocalNetworking</key><true/></dict>
     <key>UISupportedInterfaceOrientations</key>

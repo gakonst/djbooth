@@ -412,6 +412,28 @@ public struct CollectionTrackRemoval: Sendable, Equatable {
     public func saveMusicCatalog(_ value: MusicCatalog) throws {
         try saveLocalUSB(value, kind: "connected-music", id: "catalog")
     }
+    public func pairedLibrary() throws -> PairedLibrarySnapshot? {
+        try localUSBValue("paired-library", id: "catalog", as: PairedLibrarySnapshot.self)
+    }
+    public func savePairedLibrary(_ value: PairedLibrarySnapshot) throws {
+        // ANLZ is already stored as immutable, hash-verified files. Persist its
+        // references, not all decoded peaks/colors on every download or refresh.
+        // Keep display waveforms in memory; loadWaveform rebuilds them offline.
+        let tracks = value.tracks.map { track in
+            var track = track
+            if track.analysis != nil { track.waveform = nil }
+            return track
+        }
+        let metadata = try PairedLibrarySnapshot(libraryID: value.libraryID, name: value.name,
+                                                tracks: tracks, playlists: value.playlists)
+        do { try saveLocalUSB(metadata, kind: "paired-library", id: "catalog") }
+        catch { context.rollback(); throw error }
+    }
+    public func clearPairedLibrary() throws {
+        guard let snapshot = try row(key: "paired-library:catalog") else { return }
+        do { context.delete(snapshot); try persistContext() }
+        catch { context.rollback(); throw error }
+    }
     public func crewCache() throws -> CrewCache {
         try localUSBValue("crews", id: "cache", as: CrewCache.self) ?? CrewCache()
     }

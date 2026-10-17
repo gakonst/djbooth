@@ -58,7 +58,7 @@ public struct PlaybackSession: Codable, Equatable, Sendable {
                !additionalFolderPaths.contains(where: { $0.starts(with: navigation.folderPath) }),
                !collections.contains(where: { ($0.folderPath ?? []).starts(with: navigation.folderPath) }) { navigation.folderPath = [] }
             if !["title", "createdAt", "updatedAt"].contains(navigation.playlistSort) { navigation.playlistSort = "title" }
-            if !["default", "title", "bpm", "key"].contains(navigation.trackSort) { navigation.trackSort = "default" }
+            if !["default", "title", "bpm", "key", "addedAt"].contains(navigation.trackSort) { navigation.trackSort = "default" }
             result.navigation = navigation
         }
         let filters = ["All music", "Favorites", "On this device", "Unsorted"]

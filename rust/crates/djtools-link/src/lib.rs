@@ -5,6 +5,7 @@ pub mod diagnostics;
 mod discovery;
 mod djlink;
 mod error;
+pub mod history;
 mod ids;
 mod library;
 mod load;
@@ -21,6 +22,7 @@ mod telemetry;
 
 pub use djlink::*;
 pub use error::{LinkError, LinkResult};
+pub use history::HistoryRecord;
 pub use ids::stable_text_id;
 pub use library::{
     LibrarySnapshot, LibraryValidationReport, PlaylistRecord, RekordboxLibraryLoad,

@@ -1276,11 +1276,21 @@ export function writeRekordboxPlan(
       if (!item.analysisDirectory) continue;
       const content = contentByPath.get(item.mediaPath)!;
       const currentAnalysisPath = content.get("AnalysisDataPath");
+      let installedPaths: Record<"2EX" | "DAT" | "EXT", string | undefined> | undefined;
       if (
         currentAnalysisPath !== null &&
         currentAnalysisPath !== undefined &&
         currentAnalysisPath !== ""
       ) {
+        try {
+          installedPaths = db.getContentAnlzPaths(content);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        }
+      }
+      // A database reference alone is not a usable installation. A moved or
+      // previously misdirected library must restore its missing artifacts.
+      if (installedPaths?.DAT && installedPaths.EXT && installedPaths["2EX"]) {
         const synchronized = db.syncContentAnalysisMetadata(content, item.analysisDirectory, {
           commit: false,
         });

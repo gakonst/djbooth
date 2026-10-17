@@ -431,19 +431,41 @@ impl StatePublisher {
     pub async fn refresh_decks(&self, server: &DjLinkServer) -> Result<()> {
         let devices = server.list_devices().await;
         let mut decks = Vec::new();
-        for device in devices
-            .into_iter()
-            .filter(|device| device.player_number <= 6)
-        {
-            let snapshot = server.monitor_snapshot(device.player_number).await;
-            let mut deck = deck_state(
-                device.player_number,
-                device.model,
-                device.ip_addr.to_string(),
-                snapshot.deck.as_ref(),
-            );
-            hydrate_track_metadata(&mut deck, server);
-            decks.push(deck);
+        for device in devices {
+            // OMNIS announces one appliance, but publishes independent deck status as 11/12.
+            let players = if device.model.eq_ignore_ascii_case("OMNIS-DUO") {
+                vec![11, 12]
+            } else if device.player_number <= 6 {
+                vec![device.player_number]
+            } else {
+                continue;
+            };
+            for player in players {
+                let snapshot = server.monitor_snapshot(player).await;
+                let mut deck = deck_state(
+                    player,
+                    device.model.clone(),
+                    device.ip_addr.to_string(),
+                    snapshot.deck.as_ref(),
+                );
+                hydrate_track_metadata(&mut deck, server);
+                decks.push(deck);
+            }
+        }
+        // Keep the appliance layout after a disconnect; do not replace an OMNIS
+        // with three fictional CDJs while waiting for it to return.
+        for previous in &self.state.booth.read().await.decks {
+            if previous
+                .model
+                .as_deref()
+                .is_some_and(|model| model.eq_ignore_ascii_case("OMNIS-DUO"))
+                && !decks.iter().any(|deck| deck.player == previous.player)
+            {
+                let mut offline = disconnected_deck(previous.player);
+                offline.model = previous.model.clone();
+                offline.ip = previous.ip.clone();
+                decks.push(offline);
+            }
         }
         for player in 1..=3 {
             if !decks.iter().any(|deck| deck.player == player) {

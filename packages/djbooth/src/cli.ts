@@ -15,7 +15,7 @@ import ytdlpCli from "@gakonst/ytdlp-ts/cli";
 import { Cli } from "incur";
 import slskCli from "slsk-ts/cli";
 
-import { serveCli } from "./serve.js";
+import { pairingCli, serveCli } from "./serve.js";
 import { visualsCli } from "./visuals.js";
 import { replayCli } from "./replay.js";
 import { statusCli } from "./status.js";
@@ -97,6 +97,7 @@ export function createDjBoothCli(): ReturnType<typeof Cli.create> {
   cli.command(linkCli);
   cli.command(replayCli);
   cli.command(serveCli);
+  cli.command(pairingCli);
   cli.command(visualsCli);
   cli.command(statusCli);
   cli.command(stopCli);

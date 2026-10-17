@@ -3,6 +3,31 @@ import Testing
 @testable import DJBoothKit
 
 struct PlaybackMediaClockTests {
+    @Test func deckFramesAdvanceAtPitchAndStopWhenObservationsStall() {
+        let clock = PlaybackMediaClock(elapsed: 45, duration: 240,
+            timing: PlaybackTiming(elapsed: 45, playing: true, observedAt: 100),
+            rate: 1.08, extrapolationLimit: 1)
+        for frame in 0...60 {
+            let age = Double(frame) / 60
+            #expect(abs(clock.position(at: 100 + age) - (45 + age * 1.08)) < 0.000001)
+        }
+        #expect(abs(clock.position(at: 105) - 46.08) < 0.000001)
+        #expect(clock.position(at: 99) == 45)
+        let paused = clock.paused(at: 100.5)
+        #expect(abs(paused.position(at: 200) - 45.54) < 0.000001)
+        // A new authoritative cue/seek position replaces the prediction immediately.
+        let cue = PlaybackMediaClock(elapsed: 7, duration: 240,
+            timing: PlaybackTiming(elapsed: 7, playing: false, observedAt: 101),
+            rate: 0.92, extrapolationLimit: 1)
+        #expect(cue.position(at: 101) == 7)
+        #expect(cue.position(at: 200) == 7)
+        let nearEnd = PlaybackMediaClock(elapsed: 239.5, duration: 240,
+            timing: PlaybackTiming(elapsed: 239.5, playing: true, observedAt: 100),
+            rate: 0.92, extrapolationLimit: 1)
+        #expect(abs(nearEnd.position(at: 100.25) - 239.73) < 0.000001)
+        #expect(nearEnd.position(at: 101) == 240)
+    }
+
     @Test func agreeingRemoteReportsKeepOneContinuousRenderClock() {
         let initial = PlaybackMediaClock.remoteReport(elapsed: 10, duration: 300, playing: true,
                                                       resolution: 1, previous: nil, at: 100)

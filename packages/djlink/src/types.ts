@@ -193,6 +193,7 @@ export type DjLinkLoadResult = {
   loaded: true;
   playing: boolean;
   transportNote: string;
+  transportError?: string | null;
 };
 
 /** Result of a phrase-aware remote deck preparation request. */

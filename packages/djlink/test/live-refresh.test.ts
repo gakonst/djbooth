@@ -3,18 +3,31 @@ import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { djlinkCli } from "../src/cli.js";
 import { runtimePaths } from "../src/control.js";
-import { loadDjLinkTrack, refreshDjLinkLibrary, startRekordboxDjLink } from "../src/runtime.js";
+import {
+  loadDjLinkTrack,
+  refreshDjLinkLibrary,
+  runRekordboxDjLink,
+  startRekordboxDjLink,
+} from "../src/runtime.js";
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
+  vi.unstubAllEnvs();
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
 
 async function runningSource(
-  options: { supported?: boolean; failRefresh?: boolean; failStatus?: boolean } = {},
+  options: {
+    supported?: boolean;
+    failRefresh?: boolean;
+    failStatus?: boolean;
+    model?: string;
+    transportError?: string;
+  } = {},
 ) {
   const root = await mkdtemp(resolve(tmpdir(), "djlink-refresh-"));
   cleanups.push(() => rm(root, { recursive: true, force: true }));
@@ -23,6 +36,14 @@ async function runningSource(
   const methods: string[] = [];
   let refreshed = false;
   const databasePath = resolve(root, "master.db");
+  const binaryPath = resolve(root, "doctor");
+  await writeFile(
+    binaryPath,
+    `#!/bin/sh
+echo '{"ok":true,"tracks":2,"playlists":1,"analysis":{"dat":2,"ext":2,"twoEx":2},"missingAudio":[],"missingAnalysis":[]}'
+`,
+    { mode: 0o700 },
+  );
   await writeFile(
     paths.state,
     JSON.stringify({
@@ -82,14 +103,20 @@ async function runningSource(
           if (!refreshed && request.params.selector === "new track") error = "track missing";
           else result = { trackId: 42, order: 2, title: "New track", artist: "Artist" };
           break;
+        case "devices":
+          result = {
+            devices: [{ playerNumber: 11, model: options.model ?? "OMNIS-DUO", ip: "127.0.0.1" }],
+          };
+          break;
         case "load":
           result = {
             trackId: 42,
             player: request.params.player,
             packetsSent: 1,
             loaded: true,
-            playing: true,
+            playing: !options.transportError,
             transportNote: "loaded",
+            transportError: options.transportError,
           };
           break;
         default:
@@ -108,10 +135,84 @@ async function runningSource(
         server.close((error) => (error ? reject(error) : resolveClosed())),
       ),
   );
-  return { env, methods, databasePath, paths };
+  return { env, methods, databasePath, paths, binaryPath };
 }
 
 describe("live DJ Link library refresh", () => {
+  it("accepts OMNIS status IDs at the CLI and preserves a load with unconfirmed playback", async () => {
+    const { env } = await runningSource({ transportError: "Remote Play was not confirmed" });
+    vi.stubEnv("DJBOOTH_DJLINK_STATE_DIR", env.DJBOOTH_DJLINK_STATE_DIR);
+    let output = "";
+    let exitCode: number | undefined;
+    await djlinkCli.serve(["load", "new track", "--player", "12", "--format", "json"], {
+      stdout(value) {
+        output += value;
+      },
+      exit(code) {
+        exitCode = code;
+      },
+    });
+    expect(exitCode, output).toBeUndefined();
+    expect(JSON.parse(output)).toMatchObject({
+      player: 12,
+      loaded: true,
+      playing: false,
+      transportError: "Remote Play was not confirmed",
+    });
+  });
+
+  it("loads either OMNIS deck through one appliance identity without claiming remote Play", async () => {
+    const { env, databasePath, binaryPath } = await runningSource({
+      transportError: "Remote Play was not confirmed",
+    });
+    for (const player of [1, 2, 11, 12]) {
+      await expect(
+        runRekordboxDjLink({
+          env,
+          databasePath,
+          binaryPath,
+          bindIp: "127.0.0.1",
+          selector: "new track",
+          player,
+          waitMs: 0,
+        }),
+      ).resolves.toMatchObject({
+        load: {
+          player,
+          loaded: true,
+          playing: false,
+          transportError: "Remote Play was not confirmed",
+        },
+      });
+    }
+    await expect(
+      runRekordboxDjLink({
+        env,
+        databasePath,
+        binaryPath,
+        bindIp: "127.0.0.1",
+        selector: "new track",
+        player: 3,
+        waitMs: 0,
+      }),
+    ).rejects.toThrow("Player 3 was not discovered");
+  });
+
+  it("does not assign OMNIS aliases to another device model", async () => {
+    const { env, databasePath, binaryPath } = await runningSource({ model: "rekordbox" });
+    await expect(
+      runRekordboxDjLink({
+        env,
+        databasePath,
+        binaryPath,
+        bindIp: "127.0.0.1",
+        selector: "new track",
+        player: 2,
+        waitMs: 0,
+      }),
+    ).rejects.toThrow("Player 2 was not discovered");
+  });
+
   it("never stops a live source after a failed status request", async () => {
     const { env, methods, databasePath } = await runningSource({ failStatus: true });
     await expect(

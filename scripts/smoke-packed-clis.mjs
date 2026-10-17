@@ -12,7 +12,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const suppliedPackDirectory = process.argv[2];
@@ -326,42 +326,38 @@ try {
   }
   process.stdout.write("✓ packed Rekordbox playlist JSON and table\n");
 
-  const mcpDiscoveryInput = [
-    {
-      jsonrpc: "2.0",
-      id: 1,
-      method: "initialize",
-      params: {
-        protocolVersion: "2024-11-05",
-        capabilities: {},
-        clientInfo: { name: "djbooth-ts-pack-smoke", version: "1.0.0" },
-      },
-    },
-    { jsonrpc: "2.0", id: 2, method: "tools/list", params: {} },
-  ];
-  const mcpInput = [
-    ...mcpDiscoveryInput,
-    {
-      jsonrpc: "2.0",
-      id: 3,
-      method: "tools/call",
-      params: {
-        name: "ytdlp-ts_engines",
-        arguments: {},
-      },
-    },
-  ];
-  const mcp = run(djbooth, ["--mcp"], {
-    cwd: consumer,
-    input: `${mcpInput.map((request) => JSON.stringify(request)).join("\n")}\n`,
-    stdio: ["pipe", "pipe", "pipe"],
+  const packedRequire = createRequire(
+    join(realpathSync(join(consumer, "node_modules", "@gakonst", "djbooth")), "package.json"),
+  );
+  const { Client } = await import(
+    pathToFileURL(packedRequire.resolve("@modelcontextprotocol/sdk/client/index.js")).href
+  );
+  const { StdioClientTransport } = await import(
+    pathToFileURL(packedRequire.resolve("@modelcontextprotocol/sdk/client/stdio.js")).href
+  );
+  // Keep stdin open until the asynchronous tool response arrives, as a real client does.
+  async function probeMcp(flag, call) {
+    const client = new Client({ name: "djbooth-ts-pack-smoke", version: "1.0.0" });
+    const transport = new StdioClientTransport({ command: djbooth, args: [flag], cwd: consumer });
+    try {
+      await client.connect(transport);
+      return {
+        server: client.getServerVersion(),
+        tools: (await client.listTools()).tools,
+        call: await client.callTool(call),
+      };
+    } finally {
+      await transport.close();
+    }
+  }
+  const {
+    server,
+    tools,
+    call: enginesCall,
+  } = await probeMcp("--mcp", {
+    name: "ytdlp-ts_engines",
+    arguments: {},
   });
-  const responses = mcp.stdout
-    .trim()
-    .split("\n")
-    .map((line) => JSON.parse(line));
-  const initialize = responses.find((response) => response.id === 1);
-  const tools = responses.find((response) => response.id === 2)?.result?.tools;
   const requiredTools = [
     "analyze",
     "download",
@@ -385,10 +381,9 @@ try {
   const toolNames = new Set(tools?.map((tool) => tool.name));
   const resolveTool = tools?.find((tool) => tool.name === "resolve");
   const usbTool = tools?.find((tool) => tool.name === "usb");
-  const enginesCall = responses.find((response) => response.id === 3)?.result;
   const enginesResult = JSON.parse(enginesCall?.content?.[0]?.text ?? "null");
   if (
-    initialize?.result?.serverInfo?.name !== "djbooth" ||
+    server?.name !== "djbooth" ||
     !tools ||
     tools?.length < 30 ||
     !tools.some((tool) => tool.name === "slsk_download") ||
@@ -404,36 +399,15 @@ try {
   }
   process.stdout.write(`✓ djbooth stdio MCP (${tools.length} composable tools)\n`);
 
-  const codeMcp = run(djbooth, ["--codemode-mcp"], {
-    cwd: consumer,
-    input: `${[
-      ...mcpDiscoveryInput,
-      {
-        jsonrpc: "2.0",
-        id: 3,
-        method: "tools/call",
-        params: {
-          name: "code",
-          arguments: {
-            code: 'async () => codemode["ytdlp-ts_engines"]({})',
-          },
-        },
-      },
-    ]
-      .map((request) => JSON.stringify(request))
-      .join("\n")}\n`,
-    stdio: ["pipe", "pipe", "pipe"],
+  const { tools: codeTools, call: codeCall } = await probeMcp("--codemode-mcp", {
+    name: "code",
+    arguments: { code: 'async () => codemode["ytdlp-ts_engines"]({})' },
   });
-  const codeResponses = codeMcp.stdout
-    .trim()
-    .split("\n")
-    .map((line) => JSON.parse(line));
-  const codeTools = codeResponses.find((response) => response.id === 2)?.result?.tools;
-  const codeCall = codeResponses.find((response) => response.id === 3)?.result;
   const codeResult = JSON.parse(codeCall?.content?.[0]?.text ?? "null");
   if (
     codeTools?.length !== 1 ||
     codeTools[0]?.name !== "code" ||
+    codeCall?.isError ||
     codeResult?.native?.available !== true
   ) {
     throw new Error("Packed djbooth CodeMode MCP did not execute in the local sandbox");

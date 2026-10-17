@@ -23,6 +23,7 @@ export type DjBoothRuntimeState = {
   logPath: string;
   monitorUrl: string;
   sonos: SonosBridgeStatus | null;
+  pairingFile?: string | null;
 };
 
 export type DjBoothRuntimeStatus =
@@ -159,6 +160,9 @@ function normalizeServerOptions(options: DjBoothServerOptions): Required<DjBooth
     port: options.port ?? 4179,
     sonos: options.sonos ?? "",
     sonosPort: options.sonosPort ?? 0,
+    shareHost: options.shareHost ?? "",
+    sharePort: options.sharePort ?? 4184,
+    pairingFile: options.pairingFile ?? "",
   };
 }
 
