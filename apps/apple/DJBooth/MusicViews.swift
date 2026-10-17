@@ -98,7 +98,9 @@ struct LibraryView: View {
             } else {
                 ScrollView {
                     LazyVStack(spacing: 0) {
-                        ForEach(tracks) { track in TrackRow(track: track, model: model, collection: selected) }
+                        ForEach(Array(tracks.enumerated()), id: \.offset) { position, track in
+                            TrackRow(track: track, model: model, collection: selected, queuePosition: position)
+                        }
                     }.padding(.horizontal, 8)
                         .animation(animation, value: tracks.map(\.id))
                 }.id(selected?.id ?? model.filter)
@@ -169,16 +171,15 @@ struct MobileTrackList: View {
     var groupName: String? = nil
     var body: some View {
         let selected = model.collections.first { $0.id == collectionID }
-        let byID = model.tracksByID
-        let tracks = selected?.trackIDs.compactMap { byID[$0] } ?? model.tracks.filter {
-            groupName == nil || groupMode?.group(for: $0) == groupName
-        }.sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+        let tracks = model.visibleTracks(in: collectionID, groupMode: groupMode, groupName: groupName)
         List {
             if tracks.isEmpty, let selected, let item = model.connectedPlaylist(selected.id),
                model.musicCatalog.snapshots[item.id] == nil || model.musicPlaylistLoading.contains(item.id) || model.musicPlaylistErrors[item.id] != nil {
                 EmptyView()
             } else if tracks.isEmpty {
-                ContentUnavailableView("No tracks", systemImage: "music.note.list").boothLibraryCell()
+                ContentUnavailableView(model.query.isEmpty ? "No tracks" : "No matching tracks", systemImage: "magnifyingglass",
+                                       description: Text(model.query.isEmpty ? "Import music to get started." : "Try another title, artist, or album."))
+                    .boothLibraryCell()
             } else {
                 ForEach(Array(tracks.enumerated()), id: \.offset) { position, track in
                     TrackRow(track: track, model: model, collection: selected, queuePosition: position)
@@ -191,6 +192,7 @@ struct MobileTrackList: View {
                 }
             }
         }.boothLibraryList().accessibilityIdentifier("library.tracks")
+            .scrollDismissesKeyboard(.interactively)
             .overlay {
                 if tracks.isEmpty, let selected, let item = model.connectedPlaylist(selected.id) {
                     ConnectedPlaylistStatus(model: model, item: item)
@@ -204,7 +206,21 @@ struct MobileTrackList: View {
                 if let collectionID, let item = model.connectedPlaylist(collectionID) { await model.loadMusicPlaylist(item) }
             }
             .refreshable {
+                await model.refreshPairedMac()
                 if let collectionID, let item = model.connectedPlaylist(collectionID) { await model.loadMusicPlaylist(item, force: true) }
+            }
+            .safeAreaInset(edge: .top, spacing: 0) {
+                if collectionID == nil, groupName == nil {
+                    VStack(alignment: .leading, spacing: 4) {
+                        LibrarySearchField(text: $model.query, prompt: "Search all titles, artists, albums", identifier: "library.search")
+                            .frame(minHeight: 44)
+                            .submitLabel(.search)
+                            .onSubmit { UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil) }
+                        Text("\(tracks.count) tracks · \(model.trackSort == "addedAt" ? "Recently Added" : "Alphabetical")")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .accessibilityIdentifier("library.tracks.summary")
+                    }.padding(.horizontal, 12).padding(.vertical, 6).background(BoothStyle.background)
+                }
             }
     }
 }
@@ -270,10 +286,25 @@ struct TrackRow: View {
                 // Leave the row's hold gesture to native List reordering.
                 if !sharedPlaylist { trackContextActions }
             }
-            .accessibilityAction(named: "Comment & color") { editingAnnotation = true }
-            .accessibilityAction(named: "Add to playlist") { model.choosePlaylist(for: track) }
+            .accessibilityActions {
+                if !track.id.hasPrefix("paired:") {
+                    Button("Comment & color") { editingAnnotation = true }
+                    Button("Add to playlist") { model.choosePlaylist(for: track) }
+                }
+                offlineAction
+            }
+    }
+    private var offlineAction: some View {
+        let saved = model.offlineIDs.contains(track.id)
+        let downloading = model.downloading.contains(track.id)
+        return Button(saved ? "On this device" : downloading ? "Downloading…" : "Keep on this device",
+                      systemImage: saved ? "checkmark.circle" : "arrow.down.circle") {
+            Task { await model.keepOffline(track) }
+        }.disabled(saved || model.demo || downloading)
+            .accessibilityIdentifier("track.download.\(track.id)")
     }
     @ViewBuilder private var trackContextActions: some View {
+        if !track.id.hasPrefix("paired:") {
         if let removeSharedTrack { Button("Remove from shared playlist", role: .destructive, action: removeSharedTrack) }
         Button("Comment & color") { editingAnnotation = true }
         Button(model.favorites.contains(track.id) ? "Remove from favorites" : "Add to favorites") { model.favorite(track) }
@@ -283,10 +314,26 @@ struct TrackRow: View {
             if position < collection.trackIDs.count - 1 { Button("Move later") { model.move(track, in: collection, by: 1) } }
             Button("Remove from playlist", role: .destructive) { model.requestRemoval(track, from: collection) }
         }
-        Button("Keep on this device") { Task { await model.keepOffline(track) } }
-            .disabled(model.demo || model.offlineIDs.contains(track.id))
+        } else {
+            Text("Read-only · edit on your Mac")
+        }
+        offlineAction
+        #if os(iOS)
+        ForEach(model.djLink.detectedDecks) { device in
+            let playing = model.djLink.decks.first(where: { $0.id == device.player })?.state.playing
+            let reason = !model.offlineIDs.contains(track.id) ? "download first" :
+                playing == true ? "pause first" : playing == nil ? "waiting for deck" :
+                model.djLink.loadingTrackID != nil ? "loading" : nil
+            Button("Load on \(model.djLink.playerLabel(device.player))\(reason.map { " · \($0)" } ?? "")") {
+                Task { _ = await model.djLink.load(track, on: device, model: model) }
+            }
+            .disabled(reason != nil)
+            .accessibilityIdentifier("track.load.\(device.player)")
+        }
+        #endif
     }
     private var leftSwipe: RowSwipeAction? {
+        if track.id.hasPrefix("paired:") { return nil }
         if sharedPlaylist {
             return removeSharedTrack.map { action in RowSwipeAction(title: "Remove", symbol: "minus", color: .pink, perform: action) }
         }
@@ -301,6 +348,11 @@ struct TrackRow: View {
         }
     }
     private var rightSwipe: RowSwipeAction? {
+        if track.id.hasPrefix("paired:") {
+            return RowSwipeAction(title: "Keep offline", symbol: "arrow.down.circle", color: .green) {
+                Task { await model.keepOffline(track) }
+            }
+        }
         if collection != nil {
             return RowSwipeAction(title: "Add to playlist", symbol: "plus", color: .green) { model.choosePlaylist(for: track) }
         }
@@ -339,23 +391,24 @@ struct TrackRow: View {
             Button { model.favorite(track) } label: {
                 Image(systemName: model.favorites.contains(track.id) ? "heart.fill" : "heart")
                     .foregroundStyle(model.favorites.contains(track.id) ? BoothStyle.accent : .secondary)
-            }.buttonStyle(.plain).accessibilityLabel(model.favorites.contains(track.id) ? "Unfavorite \(track.title)" : "Favorite \(track.title)")
+            }.buttonStyle(.plain).disabled(track.id.hasPrefix("paired:"))
+                .accessibilityLabel(model.favorites.contains(track.id) ? "Unfavorite \(track.title)" : "Favorite \(track.title)")
             #if os(macOS)
             Text(timeLabel(track.durationSeconds)).font(.caption.monospacedDigit()).foregroundStyle(.secondary).frame(width: 40)
             #endif
             Menu {
                 Button("Comment & color", systemImage: "square.and.pencil") { editingAnnotation = true }
-                Button("Keep on this device", systemImage: "arrow.down.circle") { Task { await model.keepOffline(track) } }
-                    .disabled(model.demo || model.offlineIDs.contains(track.id))
+                    .disabled(track.id.hasPrefix("paired:"))
+                offlineAction
                 Menu("Add to playlist") {
-                    ForEach(model.collections) { collection in Button(collection.name) { model.add(track, to: collection) } }
+                    ForEach(model.collections.filter { !$0.id.hasPrefix("paired:") }) { collection in Button(collection.name) { model.add(track, to: collection) } }
                     Button("New playlist…") { model.showNewCollection = true }
-                }
-                if let collection {
+                }.disabled(track.id.hasPrefix("paired:"))
+                if let collection, !collection.id.hasPrefix("paired:") {
                     Button("Remove from playlist", role: .destructive) { model.requestRemoval(track, from: collection) }
                     Button("Move earlier", systemImage: "arrow.up") { model.move(track, in: collection, by: -1) }
                     Button("Move later", systemImage: "arrow.down") { model.move(track, in: collection, by: 1) }
-                } else {
+                } else if !track.id.hasPrefix("paired:") {
                     Button("Archive", systemImage: "archivebox") { model.archive(track) }
                 }
                 if let raw = track.hosted?.externalUrl, let url = URL(string: raw), url.scheme == "https" {
@@ -372,6 +425,7 @@ struct TrackRow: View {
         let selected = model.player.track?.id == track.id
         return VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 10) {
+                if track.id.hasPrefix("paired:") { TrackArtwork(track: track, model: model, size: 32) }
                 Button {
                     guard activation.canActivate() else { return }
                     Task { await model.play(track, preservingQueue: preservingQueue, queuePosition: queuePosition) }
@@ -383,6 +437,14 @@ struct TrackRow: View {
                     .accessibilityIdentifier("track.waveform.\(track.id)")
                 mobileTrackTitle(activation: activation, selected: selected)
                 if !typeSize.isAccessibilitySize { mobileTrackMetadata }
+                #if os(iOS)
+                if !model.djLink.detectedDecks.isEmpty {
+                    Menu { trackContextActions } label: {
+                        Image(systemName: "ellipsis").frame(width: 36, height: 44)
+                    }.accessibilityLabel("Options for \(track.title)")
+                        .accessibilityIdentifier("track.options.\(track.id)")
+                }
+                #endif
             }
             if typeSize.isAccessibilitySize {
                 mobileTrackMetadata.frame(maxWidth: .infinity, alignment: .trailing)

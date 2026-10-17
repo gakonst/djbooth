@@ -16,7 +16,8 @@ import Testing
     @Test func restoresOrderedQueuePositionAndIndependentBrowseContext() {
         let session = PlaybackSession(trackID: "a", queueIDs: ["b", "a"], elapsed: 45,
                                       selectedCollection: "set", filter: "Favorites", query: "bass",
-                                      queueCollection: "set", queueFilter: "All music")
+                                      queueCollection: "set", queueFilter: "All music",
+                                      navigation: PlaylistNavigation(trackSort: "addedAt", trackSortAscending: false))
         #expect(session.resolved(tracks: tracks, collections: [collection]) == session)
     }
     @Test func emptyConnectedFoldersStayOpenDuringRefreshAndDisappearWhenDisconnected() {

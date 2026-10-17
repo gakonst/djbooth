@@ -5,19 +5,19 @@ import DJBoothKit
 struct DJLinkConnectionCard: View {
     @Bindable var model: BoothModel
     private var link: DJLinkConnection { model.djLink }
-    private var network: Bool { link.cableDetected || link.busy || link.status.running }
+    private var network: Bool { link.wifiEnabled || link.cableDetected || link.busy || link.status.running }
     var body: some View {
         if network || model.usbConnected || model.usbReading {
             VStack(spacing: 0) {
                 Button { if network { model.showDJLink = true } else { model.showSettings = true } } label: {
                     HStack(spacing: 10) {
-                        Image(systemName: network ? "cable.connector" : "externaldrive")
+                        Image(systemName: network ? (link.wifiEnabled ? "wifi" : "cable.connector") : "externaldrive")
                             .font(.title3).foregroundStyle(BoothStyle.accent)
                         VStack(alignment: .leading, spacing: 3) {
                             Text(title).boothFont(13, relativeTo: .subheadline, weight: .semibold)
                             Text(detail).boothFont(11, relativeTo: .caption).foregroundStyle(.secondary).lineLimit(2)
                         }.frame(maxWidth: .infinity, alignment: .leading)
-                        if network && link.error == nil && (link.status.devices?.isEmpty != false) {
+                        if network && !link.waitingForLibrary && link.error == nil && (link.status.devices?.isEmpty != false) {
                             ProgressView().controlSize(.small)
                         }
                         Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary)
@@ -33,18 +33,20 @@ struct DJLinkConnectionCard: View {
     }
     private var title: String {
         if !network { return model.usbReading ? "Reading USB library…" : "USB library connected" }
-        if link.error != nil { return "CDJ connection needs attention" }
-        let count = link.status.devices?.filter { (1...6).contains($0.player) }.count ?? 0
-        if count > 0 { return count == 1 ? "CDJ connected" : "\(count) decks connected" }
-        return link.status.running ? "Finding decks…" : link.waitingForWiredAddress ? "Setting up wired network…" : "Cable detected"
+        if link.error != nil { return "DJ Link connection needs attention" }
+        if link.waitingForLibrary { return "No music ready to share" }
+        let count = link.detectedDecks.count
+        if count > 0 { return count == 1 ? "Deck connected" : "\(count) decks connected" }
+        return link.status.running ? "Finding decks…" : link.wifiEnabled ? "Waiting for Wi-Fi…" : link.waitingForWiredAddress ? "Setting up wired network…" : "Cable detected"
     }
     private var detail: String {
         if !network { return model.usbDevice?.name ?? "Your USB music is available" }
         if let error = link.error { return error }
+        if link.waitingForLibrary { return "Download audio and DJ Link analysis to this iPhone" }
         if let devices = link.status.devices, !devices.isEmpty {
-            return devices.map { "\($0.model) · Player \($0.player)" }.joined(separator: "  •  ")
+            return devices.map { $0.isOmnis ? "\($0.model) · Decks 1 & 2" : "\($0.model) · Player \($0.player)" }.joined(separator: "  •  ")
         }
-        return link.status.running ? "Connecting automatically" : link.waitingForWiredAddress ? "iPhone is assigning an address. Tap for faster setup next time." : "Starting your CDJ connection…"
+        return link.status.running ? "Connecting automatically" : link.wifiEnabled ? "Join the same network as your OMNIS-DUO" : link.waitingForWiredAddress ? "iPhone is assigning an address. Tap for faster setup next time." : "Starting your DJ Link connection…"
     }
 }
 
@@ -55,7 +57,9 @@ struct DJLinkPlayerDock: View {
     let maximumHeight: CGFloat
     @State private var showingMixer = true
     @State private var showingRecording = false
+    @State private var visiblePlayer: Int?
     private var link: DJLinkConnection { model.djLink }
+    private var hasMixerRows: Bool { link.detectedDecks.contains { !$0.isOmnis } }
     var body: some View {
         VStack(spacing: 0) {
             mixerHeader
@@ -66,10 +70,12 @@ struct DJLinkPlayerDock: View {
     }
     private var mixerHeader: some View {
         HStack {
-            Button { showingMixer.toggle() } label: {
-                Label("Mixer", systemImage: showingMixer ? "chevron.down" : "chevron.right")
-                    .frame(minHeight: 32)
-            }.accessibilityIdentifier("djlink.mixer.toggle")
+            if hasMixerRows {
+                Button { showingMixer.toggle() } label: {
+                    Label("Mixer", systemImage: showingMixer ? "chevron.down" : "chevron.right")
+                        .frame(minHeight: 32)
+                }.accessibilityIdentifier("djlink.mixer.toggle")
+            }
             Spacer()
             Button { showingRecording = true } label: {
                 Label(link.recording.isRecording ? "Recording" : "Record", systemImage: link.recording.isRecording ? "record.circle.fill" : "record.circle")
@@ -101,21 +107,36 @@ struct DJLinkPlayerDock: View {
         VStack(spacing: 4) {
             ScrollView(.vertical) {
                 VStack(spacing: 0) {
-                    if link.showingPhonePlayer { MobileNowPlaying(model: model) }
-                    ForEach(link.detectedDecks) { device in
+                    if link.showingPhonePlayer {
+                        MobileNowPlaying(model: model, onSelectPlayer: { player in
+                            visiblePlayer = player ?? 0
+                        }).id(0)
+                    }
+                    ForEach(link.detectedDecks, id: \.player) { device in
                         VStack(spacing: 0) {
-                            MobileNowPlaying(model: model, deckPlayer: device.player)
-                            if showingMixer {
+                            MobileNowPlaying(model: model, deckPlayer: device.player, onSelectPlayer: { player in
+                                visiblePlayer = player ?? 0
+                            })
+                            if showingMixer && !device.isOmnis {
                                 TimelineView(.periodic(from: .now, by: 1)) { _ in
                                     mixerRow(device, mixer: link.selectedMixer, now: ProcessInfo.processInfo.systemUptime)
                                 }
                             }
-                        }
+                        }.id(device.player)
                     }
-                }
+                }.scrollTargetLayout()
             }.frame(height: max(100, maximumHeight - 68))
                 .accessibilityIdentifier("nowPlaying.players")
-            if showingMixer { crossfaderRow }
+                // Keep the requested discovery identity even before its
+                // telemetry arrives; layout resolves newly inserted players.
+                .scrollPosition(id: $visiblePlayer, anchor: .top)
+                .onChange(of: link.showingPhonePlayer) { _, showing in
+                    visiblePlayer = showing ? 0 : link.selectedPlayer ?? link.detectedDecks.first?.player
+                }
+                .onChange(of: model.player.track?.id) { _, _ in
+                    if link.showingPhonePlayer { visiblePlayer = 0 }
+                }
+            if showingMixer && hasMixerRows { crossfaderRow }
         }
     }
     private var crossfaderRow: some View {
@@ -202,6 +223,71 @@ struct DJLinkPlayerDock: View {
             .accessibilityLabel("Deck \(player) \(label)")
             .accessibilityValue(value.map { "\(Int($0.rounded())) percent" } ?? "Unavailable")
             .accessibilityIdentifier("djlink.mixer.\(player).\(label.lowercased())")
+    }
+}
+
+/// Loading a deck is separate from the library's iPhone playback action.
+struct DJLinkTrackPicker: View {
+    @Bindable var model: BoothModel
+    let device: DJLinkStatus.Device
+    @Environment(\.dismiss) private var dismiss
+    @State private var search = ""
+    @State private var loadError: String?
+    private var deck: DJLinkDeck? { model.djLink.decks.first { $0.id == device.player } }
+    private var tracks: [Track] {
+        model.tracks.filter {
+            model.offlineIDs.contains($0.id) &&
+            (search.isEmpty || $0.title.localizedCaseInsensitiveContains(search) ||
+             ($0.artist?.localizedCaseInsensitiveContains(search) ?? false))
+        }
+    }
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    Text("Loads on the deck without playing on your iPhone. Press Play on the OMNIS when ready.")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                    if deck?.state.playing == true {
+                        Text("Pause this deck before loading another track.").foregroundStyle(.orange)
+                            .accessibilityIdentifier("djlink.load.playing")
+                    } else if deck == nil {
+                        Text("Waiting for deck status…").foregroundStyle(.secondary)
+                    }
+                    if let loadError { Text(loadError).foregroundStyle(.red) }
+                }
+                Section("On this iPhone") {
+                    ForEach(tracks) { track in
+                        Button {
+                            Task {
+                                loadError = nil
+                                if await model.djLink.load(track, on: device, model: model) { dismiss() }
+                                else { loadError = model.message; model.message = nil }
+                            }
+                        } label: {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(track.title).foregroundStyle(.primary)
+                                    Text(track.artist ?? "Unknown artist").font(.caption).foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                if model.djLink.loadingTrackID == track.id { ProgressView() }
+                                else { Image(systemName: "arrow.up.forward.circle") }
+                            }
+                        }.disabled(model.djLink.loadingTrackID != nil || deck?.state.playing != false)
+                            .accessibilityLabel("Load \(track.title) on \(model.djLink.playerLabel(device.player))")
+                            .accessibilityIdentifier("djlink.load.track.\(track.id)")
+                    }
+                    if tracks.isEmpty {
+                        Text(search.isEmpty ? "No downloaded tracks. Use Keep on this device in your library first." : "No matching downloaded tracks.")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }.searchable(text: $search, prompt: "Find a downloaded track")
+                .navigationTitle("Load · \(model.djLink.playerLabel(device.player))")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar { Button("Done") { dismiss() }.accessibilityIdentifier("djlink.load.done") }
+                .interactiveDismissDisabled(model.djLink.loadingTrackID != nil)
+        }.accessibilityIdentifier("djlink.load.picker")
     }
 }
 

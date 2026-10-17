@@ -6,6 +6,7 @@ struct PlaylistBrowserView: View {
     var folderPath: [String]? = nil
     private var path: [String] { folderPath ?? model.playlistFolderPath }
     private var musicProvider: String? { path.first.flatMap { model.musicProviderNames.contains($0) ? $0 : nil } }
+    private var isPairedFolder: Bool { path.first != nil && path.first == model.pairedMac.rootPath.first }
     private var showsEmptyState: Bool {
         #if os(iOS)
         if path.isEmpty && (!model.musicProviderNames.isEmpty || model.usbConnected) { return false }
@@ -73,7 +74,19 @@ struct PlaylistBrowserView: View {
             #endif
             folderCounts[name, default: 0] += 1
         }
-        let visibleFolders = folderCounts.sorted { $0.key.localizedStandardCompare($1.key) == .orderedAscending }
+        if !searching, model.pendingQuickAddTrackID == nil {
+            for folder in model.pairedMac.folderPaths where folder.count > path.count && folder.starts(with: path) {
+                let name = folder[path.count]
+                if folderCounts[name] == nil { folderCounts[name] = 0 }
+            }
+        }
+        let pairedFolders = model.pairedMac.folderPaths.compactMap { $0.last }
+        let visibleFolders = folderCounts.sorted {
+            if let first = pairedFolders.firstIndex(of: $0.key), let second = pairedFolders.firstIndex(of: $1.key) {
+                return first < second
+            }
+            return model.pairedMac.folderName($0.key).localizedStandardCompare(model.pairedMac.folderName($1.key)) == .orderedAscending
+        }
         var rows: [PlaylistBrowserRow] = []
         rows.reserveCapacity(pinnedPlaylists.count + visiblePlaylists.count + visibleFolders.count + 2)
         #if os(iOS)
@@ -175,6 +188,7 @@ struct PlaylistBrowserView: View {
         .task { await model.refreshCrews() }
         .task(id: path.first) { await model.refreshMusic(provider: musicProvider) }
         .refreshable {
+            await model.refreshPairedMac()
             await model.refreshCrews()
             await model.refreshMusic(force: true, provider: musicProvider)
             if let provider = musicProvider, !empty {
@@ -204,7 +218,7 @@ struct PlaylistBrowserView: View {
                                 guard !path.isEmpty else { return }
                                 model.openPlaylistFolder(Array(path.dropLast()))
                             } label: {
-                                browserNavigationRow(title: title, detail: "Up one level", symbol: "arrow.left")
+                                browserNavigationRow(title: model.pairedMac.folderName(title), detail: "Up one level", symbol: "arrow.left")
                             }.buttonStyle(BoothRowButtonStyle()).accessibilityIdentifier("playlist.folder.back")
                         case .pinnedHeader:
                             Text("PINNED").font(.system(size: 9, weight: .semibold, design: .monospaced)).tracking(1)
@@ -213,10 +227,11 @@ struct PlaylistBrowserView: View {
                             LibraryNavigationButton {
                                 model.openPlaylistFolder(path + [name])
                             } label: {
-                                browserNavigationRow(title: name, detail: "\(count) playlists", symbol: "folder")
+                                browserNavigationRow(title: model.pairedMac.folderName(name), detail: "\(count) playlists", symbol: "folder")
                             }.buttonStyle(BoothRowButtonStyle()).accessibilityIdentifier("playlist.folder.\(name)")
                         case .playlist(let collection):
                             if let item = model.connectedPlaylist(collection.id) { connectedRow(collection, item: item) }
+                            else if collection.id.hasPrefix("paired:") { pairedRow(collection) }
                             else { row(collection, trackMap: trackMap) }
                         case .empty:
                             #if os(iOS)
@@ -233,9 +248,9 @@ struct PlaylistBrowserView: View {
             ContentUnavailableView {
                 Label(searching ? "No matching playlists" : "No playlists here", systemImage: "music.note.list")
             } description: {
-                Text(searching ? "Try another title or mood." : musicProvider != nil ? "Your playlists will appear here. Manage your connected account in Settings." : "Create a playlist to organize your music.")
+                Text(searching ? "Try another title or mood." : isPairedFolder ? "This folder on your Mac is empty." : musicProvider != nil ? "Your playlists will appear here. Manage your connected account in Settings." : "Create a playlist to organize your music.")
             } actions: {
-                if !searching && musicProvider == nil {
+                if !searching && musicProvider == nil && !isPairedFolder {
                     Button("New playlist") { model.showNewCollection = true }
                         .accessibilityIdentifier("playlist.empty.create")
                 }
@@ -259,6 +274,27 @@ struct PlaylistBrowserView: View {
                 }
             }
         }
+    }
+    private func pairedRow(_ collection: Collection) -> some View {
+        let count = collection.trackIDs.filter { model.offlineIDs.contains($0) }.count
+        return HStack(spacing: 12) {
+            LibraryNavigationButton { model.openCollection(collection) } label: {
+                browserNavigationRow(title: collection.name, detail: "\(collection.trackIDs.count) tracks · \(count) on this device", symbol: "music.note.list")
+            }.buttonStyle(BoothRowButtonStyle()).accessibilityIdentifier("playlist.row.\(collection.id)")
+            Button {
+                Task { await model.keepCollectionOffline(collection) }
+            } label: {
+                Image(systemName: count == collection.trackIDs.count && count > 0 ? "checkmark.circle" : "arrow.down.circle")
+            }.buttonStyle(.plain).padding(.trailing, 12)
+                .disabled(model.demo || collection.trackIDs.isEmpty || collection.trackIDs.contains(where: { model.downloading.contains($0) }))
+                .accessibilityLabel("Keep \(collection.name) offline")
+                .accessibilityIdentifier("pair.download.\(collection.id)")
+        }.disabled(model.pendingQuickAddTrackID != nil)
+            .contextMenu {
+                Button("Keep playlist offline") { Task { await model.keepCollectionOffline(collection) } }
+                Button("Refresh from Mac") { Task { await model.refreshPairedMac() } }
+                Text("Read-only · edit on your Mac")
+            }
     }
     private func connectedRow(_ collection: Collection, item: MusicPlaylist) -> some View {
         let downloaded = model.musicIsDownloaded(item)

@@ -200,6 +200,7 @@ struct BoothRoot: View {
                 guard scenePhase == .active, !model.demo, !PerformanceProbe.offline else { return }
                 while !Task.isCancelled {
                     do { try await Task.sleep(for: .seconds(20)) } catch { return }
+                    await model.refreshPairedMac()
                     await model.refreshCrews()
                     if let crewID = model.selectedCrewID { await model.loadCrew(crewID) }
                     if let crewID = model.selectedCrewID, let crateID = model.selectedCrewCrateID { await model.loadCrewCrate(crewID: crewID, crateID: crateID) }
@@ -222,14 +223,10 @@ struct BoothRoot: View {
                 }
         }
         #else
-        if model.needsMobileSignIn {
-            MobileSignInView(model: model)
-        } else {
-            ZStack {
-                MobileLibraryNavigation(model: model)
-                    .allowsHitTesting(!model.showAgent).accessibilityHidden(model.showAgent)
-                if model.showAgent { MusicAgentView(model: model).zIndex(1) }
-            }
+        ZStack {
+            MobileLibraryNavigation(model: model)
+                .allowsHitTesting(!model.showAgent).accessibilityHidden(model.showAgent)
+            if model.showAgent { MusicAgentView(model: model).zIndex(1) }
         }
         #endif
     }

@@ -49,7 +49,7 @@ private struct LibrarySidebar: View {
                     }.accessibilityIdentifier("library.agent")
                 }
                 Button { guard !suppressSelection else { return }; close(); model.showDJLink = true } label: {
-                    row("CDJs", symbol: "network")
+                    row("DJ Link", symbol: "network")
                 }.accessibilityIdentifier("library.drawer.djlink")
                 Button { guard !suppressSelection else { return }; close(); model.showSettings = true } label: {
                     row("Sync & settings", symbol: "gearshape")
@@ -98,6 +98,15 @@ private struct LibrarySidebar: View {
     UIMenu(children: [UIDeferredMenuElement.uncached { completion in
         Task { @MainActor in
             var actions: [UIMenuElement] = []
+            if model.browseMode == .tracks, model.selectedCollection == nil, crewID == nil {
+                let sorts = [("Alphabetical", "title", true), ("Recently Added", "addedAt", false)]
+                actions.append(UIMenu(title: "Sort tracks", options: .displayInline, children: sorts.map { title, field, ascending in
+                    UIAction(title: title, image: UIImage(systemName: field == "addedAt" ? "clock" : "textformat.abc"),
+                             state: model.trackSort == field ? .on : .off) { _ in
+                        model.trackSort = field; model.trackSortAscending = ascending
+                    }
+                }))
+            }
             let canEdit = crewID.map { id in
                 model.crewDetails[id]?.crew.role.canEdit ?? model.crews.first(where: { $0.id == id })?.role.canEdit ?? false
             } ?? true
@@ -171,6 +180,12 @@ private final class LibraryPageController: UIHostingController<LibraryPage> {
         actions.tintColor = .label
         actions.accessibilityLabel = "Library actions"; actions.accessibilityIdentifier = "library.actions"
         navigationItem.rightBarButtonItems = [actions, agent]
+        if destination != .browse(.tracks) {
+            let search = UIBarButtonItem(title: "Search", primaryAction: UIAction { _ in model.browse(.tracks) })
+            search.accessibilityLabel = "Search all music"
+            search.accessibilityIdentifier = "library.search.open"
+            navigationItem.rightBarButtonItems?.append(search)
+        }
         navigationItem.largeTitleDisplayMode = .never
         navigationItem.backButtonDisplayMode = .minimal
         let hasDrawer: Bool
@@ -203,7 +218,7 @@ private final class LibraryPageController: UIHostingController<LibraryPage> {
     }
     func refreshTitle(model: BoothModel) {
         switch destination {
-        case .folder(let path): title = path.last ?? (model.pendingQuickAddTrackID == nil ? "Playlists" : "Add to playlist")
+        case .folder(let path): title = path.last.map { model.pairedMac.folderName($0) } ?? (model.pendingQuickAddTrackID == nil ? "Playlists" : "Add to playlist")
         case .browse(let mode): title = mode.rawValue
         case .group(_, let name): title = name
         case .collection(let id): title = model.collections.first { $0.id == id }?.name ?? "Playlist"

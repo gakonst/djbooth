@@ -591,19 +591,33 @@ public actor AudioFiles {
         guard let file = url(hash: hash), FileManager.default.fileExists(atPath: file.path) else { return nil }
         return file
     }
-    public func download(_ request: URLRequest, expectedHash: String? = nil) async throws -> (URL, String) {
-        let (temporary, response) = try await session.download(for: request)
+    /// Small, already bounded artifacts share the same immutable hash namespace as audio/ANLZ.
+    public func store(_ data: Data, expectedHash: String) throws -> URL {
+        let hash = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        guard hash == expectedHash, var destination = url(hash: hash) else { throw ClientError.invalidMedia }
+        try Task.checkCancellation()
+        try data.write(to: destination, options: .atomic)
+        var values = URLResourceValues(); values.isExcludedFromBackup = true
+        try destination.setResourceValues(values)
+        return destination
+    }
+    public func download(_ request: URLRequest, expectedHash: String? = nil, session: URLSession? = nil) async throws -> (URL, String) {
+        let (temporary, response) = try await (session ?? self.session).download(for: request)
         defer { try? FileManager.default.removeItem(at: temporary) }
         try Task.checkCancellation()
         _ = try checked(Data(), response)
         let hash = try await Self.hashAsync(temporary)
         if let expectedHash, hash != expectedHash { throw ClientError.invalidMedia }
         guard let destination = url(hash: hash) else { throw ClientError.invalidMedia }
-        if !FileManager.default.fileExists(atPath: destination.path) {
+        // The name alone does not prove an existing cache file is intact.
+        // Install the verified bytes atomically, including when repairing it.
+        if FileManager.default.fileExists(atPath: destination.path) {
+            _ = try FileManager.default.replaceItemAt(destination, withItemAt: temporary)
+        } else {
             try FileManager.default.moveItem(at: temporary, to: destination)
-            var values = URLResourceValues(); values.isExcludedFromBackup = true
-            var file = destination; try file.setResourceValues(values)
         }
+        var values = URLResourceValues(); values.isExcludedFromBackup = true
+        var file = destination; try file.setResourceValues(values)
         return (destination, hash)
     }
     public static func hash(_ file: URL) throws -> String {
