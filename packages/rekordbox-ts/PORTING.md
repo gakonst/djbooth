@@ -32,6 +32,43 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 
 ## Decisions
 
+### 2026-10-17 — OMNIS-DUO wireless library, monitor and durable history
+
+- Physical testing established Wi-Fi library browsing, audio delivery and deck telemetry from a
+  Mac source, including playback with the USB-C connection removed. This is LINK library serving,
+  not a claim that OMNIS implements every CDJ or Stagehand control.
+- OMNIS announces one appliance, with independent deck status on identities 11/12. Verified loads
+  use physical selectors 1/2 in the Rekordbox packet variant; confirmation still uses 11/12. A
+  right-deck load was confirmed against hardware status. Earlier manual loads/Play presses are
+  not evidence of remote control. Remote Play remains unverified.
+- Broadcast discovery gaps previously made an active appliance look newly discovered. Valid
+  status traffic now refreshes its liveness without creating a second identity or renegotiating
+  its source connection. UDP regression coverage exercises both decks through that gap.
+- OMNIS transport state takes precedence over reused CDJ flags: paused/cued packets can retain
+  the moving flag and secondary state `0xfa`. The monitor publishes both deck identities and
+  retains the OMNIS layout while disconnected.
+- Daily playback history lives in `djbooth_play_history` inside `master.db`. A blocking writer
+  records only played tracks from this source, retries failed writes, and publishes committed
+  entries to RemoteDB without restarting audio service. Tests cover encrypted databases, restart,
+  midnight, duplicate plays, wrong sources, failed-write retry, and wire-level history browsing.
+  Live recording saved tracks played on both decks. Physical History-menu browsing after a
+  reconnect remains a hardware check; the older lost history cannot be reconstructed.
+- USB audio can be copied into hash-addressed library storage before analysis. Copies are verified
+  and atomically published without overwriting existing bytes or changing the USB. OneLibrary
+  restoration reconstructs folder order, repeated playlist entries, artist/album/genre/label
+  relationships, and pending memberships inside `master.db`; reruns reuse mapped playlist IDs.
+  The mapping is scoped by mount path, so relocating the same USB is not automatic reconciliation.
+- The monitor uses AlphaTheta's [3500 × 2994 top-view asset][omnis-top], cropped to its
+  3180 × 1974 alpha bounds. It scales proportionally within both window dimensions, with no
+  surrounding dashboard chrome. The screen can expand for readability. Live overlays are limited
+  to received telemetry and library waveforms; mixer controls and meters are reference artwork.
+  The source image is not native 4K, and no synthetic upscaling is represented as extra detail.
+- iPhone local-library and USB navigation no longer require cloud sign-in. Optional cloud and
+  agent features retain their existing authentication boundary. The non-demo signed-out UI test
+  passes through launch, USB navigation and relaunch on the iOS simulator.
+
+[omnis-top]: https://assets.alphatheta.com/wp-content/uploads/2024/01/OMNIS-DUO-CGI-top-3500x2994-1.webp
+
 ### 2026-08-04 — single agent surface
 
 - Removed authored and generated DJBooth skills, skill install smoke tests, and every package-level
