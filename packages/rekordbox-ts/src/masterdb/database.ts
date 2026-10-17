@@ -2838,7 +2838,7 @@ export class MasterDatabase {
     if (this.hasColumn(row.tableName, "updated_at")) row.set("updated_at", new Date());
   }
 
-  /** Move a playlist within its parent or into another folder. */
+  /** Move a playlist within its parent, into another folder, or to parent "root". */
   movePlaylist(
     playlist: models.DjmdPlaylist | string | number,
     options: { parent?: models.DjmdPlaylist | string | number; seq?: number },
@@ -2848,9 +2848,10 @@ export class MasterDatabase {
     const row = this.resolve(models.DjmdPlaylist, playlist);
     const oldParent = row.ParentID;
     const oldSeq = row.Seq;
-    const newParent = options.parent
-      ? this.resolve(models.DjmdPlaylist, options.parent)
-      : undefined;
+    const newParent =
+      options.parent && options.parent !== "root"
+        ? this.resolve(models.DjmdPlaylist, options.parent)
+        : undefined;
     if (newParent && newParent.Attribute !== models.PlaylistType.FOLDER)
       throw new TypeError("Parent is not a folder");
     if (newParent) {
@@ -2869,7 +2870,7 @@ export class MasterDatabase {
             : this.query(models.DjmdPlaylist).where({ ID: parentId }).oneOrNone();
       }
     }
-    const parentId = newParent?.ID ?? oldParent;
+    const parentId = options.parent === "root" ? "root" : (newParent?.ID ?? oldParent);
     const siblings = this.query(models.DjmdPlaylist)
       .where({ ParentID: parentId })
       .orderBy("Seq")

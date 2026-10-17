@@ -63,6 +63,7 @@ import {
   PlaylistContent as DevicePlaylistContent,
 } from "./devicelib-plus/index.js";
 import { type ContentCuePatch, performGuardedCueMutation } from "./masterdb/safe-cue-write.js";
+import { copyAudioToLibrary } from "./utils.js";
 
 export const rekordboxCli = Cli.create("rekordbox", {
   version,
@@ -2034,6 +2035,12 @@ playlistCli.command("add", {
     audioPath: z.string().describe("Existing local audio file"),
   }),
   options: dbWriteOptions.extend({
+    copyTo: z
+      .string()
+      .optional()
+      .describe(
+        "Copy audio into this library directory before analysis; leave the source unchanged",
+      ),
     analyzerBinary: z.string().optional().describe("Selected analyzer executable override"),
     durationSeconds: z
       .number()
@@ -2070,7 +2077,9 @@ playlistCli.command("add", {
     },
   ],
   async run(c) {
-    const audioPath = realpathSync(resolve(c.args.audioPath));
+    const audioPath = c.options.copyTo
+      ? await copyAudioToLibrary(c.args.audioPath, c.options.copyTo)
+      : realpathSync(resolve(c.args.audioPath));
     const controller = new AbortController();
     const abort = () => controller.abort(new DOMException("Interrupted", "AbortError"));
     process.once("SIGINT", abort);
@@ -2176,16 +2185,22 @@ playlistCli.command("move", {
     playlist: z.string().describe("Playlist ID, exact name, or hierarchy path"),
   }),
   options: dbWriteOptions.extend({
-    parent: z.string().optional().describe("New parent folder ID, exact name, or hierarchy path"),
+    parent: z
+      .string()
+      .optional()
+      .describe('New parent folder ID, exact name, hierarchy path, or "root"'),
     seq: z.number().int().positive().optional().describe("New one-based sequence"),
   }),
   run(c) {
     const db = openDatabase(c.options, true);
     try {
       const { row: playlist } = resolvePlaylistSelector(db, c.args.playlist);
-      const parent = c.options.parent
-        ? resolvePlaylistSelector(db, c.options.parent, ["folder"]).row
-        : undefined;
+      const parent =
+        c.options.parent === "root"
+          ? "root"
+          : c.options.parent
+            ? resolvePlaylistSelector(db, c.options.parent, ["folder"]).row
+            : undefined;
       db.movePlaylist(playlist, { parent, seq: c.options.seq });
       db.commit();
       return playlist;

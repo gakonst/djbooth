@@ -620,6 +620,61 @@ describe("CLI process boundary", () => {
     expect(JSON.parse(selected.stdout).playlist.id).toBe("playlist-1");
   }, 20_000);
 
+  it("moves a playlist to root without changing its identity or ordered tracks", () => {
+    const root = mkdtempSync(join(tmpdir(), "rekordbox-ts-cli-move-root-"));
+    roots.push(root);
+    const path = join(root, "master.db");
+    const db = MasterDatabase.createManaged(path);
+    const folder = db.createPlaylistFolder("Sets");
+    const playlist = db.createPlaylist("Move me", { parent: folder });
+    const sibling = db.createPlaylist("Stay", { parent: folder });
+    writeFileSync(join(root, "a.mp3"), "audio A");
+    writeFileSync(join(root, "b.mp3"), "audio B");
+    const a = db.addContent(join(root, "a.mp3"), { Title: "A" });
+    const b = db.addContent(join(root, "b.mp3"), { Title: "B" });
+    for (const track of [b, a, b]) db.addToPlaylist(playlist, track);
+    db.commit();
+    db.close();
+
+    const result = runCli(
+      "db",
+      "playlist",
+      "move",
+      playlist.ID,
+      "--parent",
+      "root",
+      "--seq",
+      "1",
+      "--path",
+      path,
+      "--json",
+    );
+    expect(result.status, result.stderr || result.stdout).toBe(0);
+    const reopened = new MasterDatabase(path);
+    try {
+      const entries = reopened.listPlaylists();
+      expect(entries.find((row) => row.id === playlist.ID)).toMatchObject({
+        parentId: "root",
+        sequence: 1,
+      });
+      expect(entries.find((row) => row.id === folder.ID)).toMatchObject({
+        parentId: "root",
+        sequence: 2,
+      });
+      expect(entries.find((row) => row.id === sibling.ID)).toMatchObject({
+        parentId: folder.ID,
+        sequence: 1,
+      });
+      expect(reopened.getPlaylistTracks(playlist.ID).map((track) => track.contentId)).toEqual([
+        b.ID,
+        a.ID,
+        b.ID,
+      ]);
+    } finally {
+      reopened.close();
+    }
+  });
+
   it("accepts an ID when duplicate names share one parent", () => {
     const path = playlistFixture();
     const database = new Database(path);
