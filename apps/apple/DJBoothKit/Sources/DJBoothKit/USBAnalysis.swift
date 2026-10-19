@@ -93,6 +93,33 @@ public enum USBAnalysis {
         }
         return result?.peaks.isEmpty == false ? result : nil
     }
+
+    /// Decode already-verified, hash-addressed artifacts without contacting the
+    /// paired Mac. Disk reads and parsing stay off the caller's UI executor.
+    public static func read(_ analysis: CDJAnalysis, files: AudioFiles, duration: Double) async throws -> Waveform? {
+        let paths = [analysis.dat, analysis.ext].compactMap { files.url(hash: $0) }
+        let task = Task.detached(priority: .utility) { () throws -> Waveform? in
+            var result: Waveform?
+            for file in paths {
+                try Task.checkCancellation()
+                guard FileManager.default.fileExists(atPath: file.path) else { continue }
+                guard let size = try file.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+                      size <= 32 * 1_024 * 1_024 else { throw USBLibraryError.tooLarge }
+                let handle = try FileHandle(forReadingFrom: file)
+                defer { try? handle.close() }
+                if var waveform = try parse(handle.read(upToCount: 32 * 1_024 * 1_024 + 1) ?? Data(), duration: duration) {
+                    if waveform.beatGrid?.times.isEmpty != false { waveform.beatGrid = result?.beatGrid }
+                    result = waveform
+                }
+            }
+            return result?.peaks.isEmpty == false ? result : nil
+        }
+        return try await withTaskCancellationHandler {
+            try await task.value
+        } onCancel: {
+            task.cancel()
+        }
+    }
 }
 
 /// Serialize removable-media analysis reads so scrolling does not launch one

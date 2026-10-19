@@ -153,10 +153,10 @@ private struct BoothLaunchConfiguration: Sendable {
         return collection.trackIDs.allSatisfy { tracksByID[$0]?.mediaHash != nil }
     }
     var playlistCollections: [Collection] {
-        musicCatalog.visibleCollections(in: collections, jobs: importJobs).sorted { first, second in
+        musicCatalog.visibleCollections(in: collections, jobs: importJobs).filter { !$0.id.hasPrefix("paired:") }.sorted { first, second in
             let comparison = first.name.localizedStandardCompare(second.name)
             return comparison == .orderedSame ? first.id < second.id : comparison == .orderedAscending
-        }
+        } + pairedMac.collections
     }
     private var musicRefreshTask: Task<Void, Never>?
     func refreshMusic(force: Bool = false, provider: String? = nil) async {
@@ -476,7 +476,6 @@ private struct BoothLaunchConfiguration: Sendable {
     private let phoneToolHost = PhoneToolHost()
     private var phoneToolsRunID = UUID()
     var accountConnectionID = UUID()
-    var needsMobileSignIn: Bool { !demo && cloud == nil }
     var hasCloudSession: Bool { cloud != nil }
     private var agentPendingInput: String?
     var cloudCapabilities: [String] = []
@@ -842,6 +841,7 @@ private struct BoothLaunchConfiguration: Sendable {
     private(set) var initialWaveformColumns: [String: AnalysisWaveformColumns] = [:]
     var cloudURL: String
     var workstationURL: String
+    let pairedMac = PairedMacLibrary()
     let demo: Bool
     private(set) var store: LibraryStore
     private(set) var audio: AudioFiles
@@ -929,6 +929,10 @@ private struct BoothLaunchConfiguration: Sendable {
         crews = crewCache.crews; crewDetails = crewCache.details; crewCrates = crewCache.crates
         PerformanceProbe.event("library_store_ready")
         audio = try AudioFiles(directory: configuration.audioDirectory, session: PerformanceProbe.serverUnavailableSession)
+        do {
+            try await pairedMac.open(directory: root.appendingPathComponent("PairedMac"), inMemory: demo)
+            await pairedMac.refreshAvailability(in: audio)
+        } catch { pairedMac.error = "Your Mac pairing could not open. Pair again in settings." }
         playbackPreferences = PlaybackSessionPreferences(scope: demo ? "demo-\(uiTestID?.uuidString ?? UUID().uuidString)" : scope)
         #if os(iOS)
         sonos.configure(playbackPreferences)
@@ -1038,6 +1042,12 @@ private struct BoothLaunchConfiguration: Sendable {
             do { try await configureCloud(url: cloudURL, token: token) }
             catch { message = error.localizedDescription }
         }
+        if !demo, let pairing = ProcessInfo.processInfo.environment["DJBOOTH_PAIRING_JSON"] {
+            // Development setup uses the same certificate pin, authentication,
+            // catalogue validation, and Keychain persistence as interactive pairing.
+            do { try await connectPairedMac(Data(pairing.utf8)) }
+            catch { pairedMac.error = error.localizedDescription }
+        }
         #endif
         PerformanceProbe.event("library_session_restored")
         #if DEBUG
@@ -1087,6 +1097,7 @@ private struct BoothLaunchConfiguration: Sendable {
     func reload(metadataOnly: Bool = false, waveformTrackIDs: Set<String> = []) async throws {
         let request = UUID(); reloadRequest = request
         let source = store
+        await pairedMac.refreshAvailability(in: audio)
         while true {
             // SwiftData objects never leave their owning actor. The handoff is
             // immutable strings; waveform JSON and filesystem work runs elsewhere.
@@ -1103,15 +1114,21 @@ private struct BoothLaunchConfiguration: Sendable {
         }
     }
     private func applyLibrarySnapshot(_ snapshot: LibrarySnapshot, metadataOnly: Bool) throws {
-        let availableTracks = snapshot.tracks.filter { sourceIsAvailable($0.id) } + musicCatalog.tracks
-        let availableCollections = snapshot.collections.filter { sourceIsAvailable($0.id) } + musicCatalog.collections(jobs: importJobs, library: snapshot.collections)
+        let availableTracks = snapshot.tracks.filter { sourceIsAvailable($0.id) } + musicCatalog.tracks + pairedMac.tracks
+        let availableCollections = snapshot.collections.filter { sourceIsAvailable($0.id) } + musicCatalog.collections(jobs: importJobs, library: snapshot.collections) + pairedMac.collections
         if tracks != availableTracks { tracks = availableTracks }
         else { rebuildTrackIndex() } // A crew-only account can launch with no personal rows.
         if collections != availableCollections { collections = availableCollections }
         if favorites != snapshot.favorites { favorites = snapshot.favorites }
         if annotations != snapshot.annotations { annotations = snapshot.annotations }
         let sharedOffline = offlineIDs.filter { $0.hasPrefix("crew:") && tracksByID[$0] != nil }
-        let availableOffline = snapshot.offlineIDs.filter { !$0.hasPrefix("usb:") }.union(sharedOffline)
+        var availableOffline = snapshot.offlineIDs.filter { !$0.hasPrefix("usb:") }.union(sharedOffline).union(pairedMac.offlineIDs)
+        #if DEBUG && os(iOS) && targetEnvironment(simulator)
+        // UI-only availability fixture; demo loads never call the Rust server.
+        if demo, ProcessInfo.processInfo.arguments.contains("--ui-test-deck-downloads") {
+            availableOffline.formUnion(["demo-2", "demo-5"])
+        }
+        #endif
         if offlineIDs != availableOffline { offlineIDs = availableOffline }
         cacheSharedAudio()
         prunePlaylistRemovalHistory()
@@ -1134,30 +1151,49 @@ private struct BoothLaunchConfiguration: Sendable {
     private func reloadCollections() throws {
         collections = try store.values(.collection, as: Collection.self).filter { sourceIsAvailable($0.id) }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
         collections += musicCatalog.collections(jobs: importJobs, library: collections)
+        collections += pairedMac.collections
         prunePlaylistRemovalHistory()
         try reloadSyncState()
         if playbackSessionReady { reconcilePlaybackSession() }
     }
     var visibleTracks: [Track] {
         if let crateID = selectedCrewCrateID, let detail = crewCrates[crateID] { return detail.items.compactMap { localTrack(for: $0) } }
-        let members = selectedCollection.flatMap { id in collections.first { $0.id == id }?.trackIDs }
+        return visibleTracks(in: selectedCollection, groupMode: browseMode, groupName: browseGroup)
+    }
+    /// Native pages and playback share filtering/order, including repeated playlist positions.
+    func visibleTracks(in collectionID: String?, groupMode: LibraryBrowseMode? = nil, groupName: String? = nil) -> [Track] {
+        let members = collectionID.flatMap { id in collections.first { $0.id == id }?.trackIDs }
         let assigned = filter == "Unsorted" ? Set(collections.flatMap(\.trackIDs)) : []
         let candidates: [Track]
         if let members {
             var seen = Set<String>()
-            candidates = members.compactMap { (selectedCollection?.hasPrefix("usb:") == true || selectedCollection?.hasPrefix("connected:") == true || seen.insert($0).inserted) ? tracksByID[$0] : nil }
+            candidates = members.compactMap { (collectionID?.hasPrefix("usb:") == true || collectionID?.hasPrefix("connected:") == true || collectionID?.hasPrefix("paired:") == true || seen.insert($0).inserted) ? tracksByID[$0] : nil }
         } else { candidates = tracks }
         var result = candidates.filter { track in
-            (selectedCollection != nil || showPlaylistBrowser || browseGroup == nil || browseMode.group(for: track) == browseGroup) &&
+            (collectionID != nil || groupName == nil || groupMode?.group(for: track) == groupName) &&
             (filter != "Favorites" || favorites.contains(track.id)) &&
             (filter != "Unsorted" || !assigned.contains(track.id)) &&
             (filter != "On this device" || offlineIDs.contains(track.id)) &&
             (query.isEmpty || "\(track.title) \(track.artist ?? "") \(track.album ?? "") \(track.genre ?? "") \(annotations[track.id]?.note ?? "")".localizedStandardContains(query))
         }
         if trackSort != "default" {
+            var addedDates: [String: Date] = [:]
+            if trackSort == "addedAt" {
+                for track in result {
+                    guard let timestamp = track.addedAt else { continue }
+                    addedDates[track.id] = (try? Date(timestamp, strategy: .iso8601.year().month().day().time(includingFractionalSeconds: true)))
+                        ?? (try? Date(timestamp, strategy: .iso8601))
+                }
+            }
             result.sort { first, second in
                 let comparison: ComparisonResult
                 switch trackSort {
+                case "addedAt":
+                    guard let firstDate = addedDates[first.id], let secondDate = addedDates[second.id] else {
+                        if addedDates[first.id] == addedDates[second.id] { return first.id < second.id }
+                        return addedDates[first.id] != nil
+                    }
+                    comparison = firstDate.compare(secondDate)
                 case "bpm":
                     if first.bpm == nil || second.bpm == nil {
                         if first.bpm == second.bpm { return first.id < second.id }
@@ -1229,12 +1265,36 @@ private struct BoothLaunchConfiguration: Sendable {
     func startup() async {
         guard !demo else { return }
         async let remote: Void = synchronize()
+        await refreshPairedMac()
         #if os(macOS) || targetEnvironment(simulator)
         await refreshWorkstation()
         #endif
         await remote
         await refreshMusic()
         await fulfillOfflineLaunchRequest()
+    }
+    func connectPairedMac(_ data: Data) async throws {
+        #if os(iOS)
+        // Pairing receives the Mac's library; it must not start a competing source
+        // as the first downloaded recording becomes available.
+        djLink.wifiEnabled = false
+        await djLink.disconnect()
+        #endif
+        try await pairedMac.connect(data)
+        try await reload()
+        openPlaylistFolder(pairedMac.rootPath)
+    }
+    func refreshPairedMac() async {
+        guard pairedMac.isPaired else { return }
+        await pairedMac.refresh()
+        do { try await reload() } catch { pairedMac.error = error.localizedDescription }
+    }
+    func forgetPairedMac() async {
+        do {
+            try pairedMac.forget()
+            if player.track?.id.hasPrefix("paired:") == true { playbackRequest = UUID(); player.stop() }
+            try await reload()
+        } catch { pairedMac.error = error.localizedDescription }
     }
     func connectWorkstation(url: String) async throws {
         _ = try Endpoint(url, loopbackOnly: true)
@@ -1359,11 +1419,20 @@ private struct BoothLaunchConfiguration: Sendable {
         try store.ingest([track])
         tracks.append(track)
     }
+    private func allowLocalEdit(_ ids: String...) -> Bool {
+        guard !ids.contains(where: { $0.hasPrefix("paired:") }) else {
+            message = "This library belongs to your Mac. Edit it there, then refresh this device."
+            return false
+        }
+        return true
+    }
     func favorite(_ track: Track) {
+        guard allowLocalEdit(track.id) else { return }
         do { try retainSharedTrack(track); try store.toggleFavorite(track.id); favorites = try store.favoriteIDs(); try reloadSyncState() } catch { message = error.localizedDescription }
     }
     func annotation(for track: Track) -> TrackAnnotation { annotations[track.id] ?? TrackAnnotation() }
     func setNote(_ note: String, for track: Track) {
+        guard allowLocalEdit(track.id) else { return }
         guard note.utf8.count <= TrackAnnotation.maxNoteUTF8Bytes else {
             message = "This comment is too long. Keep it under 16 KB."; return
         }
@@ -1374,6 +1443,7 @@ private struct BoothLaunchConfiguration: Sendable {
         } catch { message = error.localizedDescription }
     }
     func setColor(_ color: TrackColor?, for track: Track) {
+        guard allowLocalEdit(track.id) else { return }
         do {
             try retainSharedTrack(track)
             try store.setColor(color, trackID: track.id)
@@ -1424,6 +1494,7 @@ private struct BoothLaunchConfiguration: Sendable {
         if let item = connectedPlaylist(collection.id) { Task { await loadMusicPlaylist(item) } }
         guard let current = collections.first(where: { $0.id == collection.id }) else { return }
         if let trackID = pendingQuickAddTrackID {
+            guard allowLocalEdit(trackID, collection.id) else { return }
             do {
                 if let track = tracksByID[trackID] { try retainSharedTrack(track) }
                 try store.addTrack(trackID, toCollection: current.id); try reloadCollections()
@@ -1439,7 +1510,7 @@ private struct BoothLaunchConfiguration: Sendable {
             // the user was browsing, including an explicitly selected root.
             if !showPlaylistBrowser { playlistFolderPath = current.folderPath ?? [] }
             showPlaylistBrowser = false
-            filter = "All music"; query = ""
+            filter = "All music"; query = ""; trackSort = "default"; trackSortAscending = true
         }
     }
     func backFromCollection() {
@@ -1449,7 +1520,7 @@ private struct BoothLaunchConfiguration: Sendable {
     func cancelQuickAdd() { finishQuickAdd(preferredID: nil) }
     private func finishQuickAdd(preferredID: String?) {
         selectedCrewID = nil; selectedCrewCrateID = nil
-        let previous = quickAddReturnSession?.resolved(tracks: tracks, collections: collections, additionalFolderPaths: musicProviderNames.map { [$0] })
+        let previous = quickAddReturnSession?.resolved(tracks: tracks, collections: collections, additionalFolderPaths: musicProviderNames.map { [$0] } + pairedMac.folderPaths)
         pendingQuickAddTrackID = nil; quickAddReturnSession = nil
         changeNavigation {
             if let previous {
@@ -1460,18 +1531,22 @@ private struct BoothLaunchConfiguration: Sendable {
         }
     }
     func quickAdd(_ track: Track) {
-        guard tracksByID[track.id] != nil else { return }
+        guard tracksByID[track.id] != nil, allowLocalEdit(track.id) else { return }
         if let target = quickAddTarget { add(track, to: target); return }
         choosePlaylist(for: track)
     }
     func choosePlaylist(for track: Track) {
-        guard tracksByID[track.id] != nil else { return }
+        guard tracksByID[track.id] != nil, allowLocalEdit(track.id) else { return }
         quickAddReturnSession = currentPlaybackSession(); pendingQuickAddTrackID = track.id
         openPlaylistBrowser()
         if collections.isEmpty && crews.isEmpty { showNewCollection = true }
     }
     func createCollection(_ name: String) {
         guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        guard allowLocalEdit(pendingQuickAddTrackID ?? ""), playlistFolderPath.first?.hasPrefix("paired:") != true else {
+            message = "Create playlists on your Mac for this library."
+            return
+        }
         do {
             if let id = pendingQuickAddTrackID, let track = tracksByID[id] { try retainSharedTrack(track) }
             let ids = pendingQuickAddTrackID.map { [$0] } ?? []
@@ -1482,12 +1557,12 @@ private struct BoothLaunchConfiguration: Sendable {
         } catch { message = error.localizedDescription }
     }
     func add(_ track: Track, to collection: Collection) {
-        guard !collection.id.hasPrefix("connected:") else { return }
+        guard !collection.id.hasPrefix("connected:"), allowLocalEdit(track.id, collection.id) else { return }
         do { try retainSharedTrack(track); try store.addTrack(track.id, toCollection: collection.id); try reloadCollections() }
         catch { message = error.localizedDescription }
     }
     func requestRemoval(_ track: Track, from collection: Collection) {
-        guard !collection.id.hasPrefix("connected:") else { return }
+        guard !collection.id.hasPrefix("connected:"), allowLocalEdit(collection.id) else { return }
         guard let current = collections.first(where: { $0.id == collection.id }),
               current.trackIDs.contains(track.id) else { return }
         pendingPlaylistRemoval = PlaylistRemovalRequest(trackID: track.id, trackTitle: track.title,
@@ -1522,24 +1597,28 @@ private struct BoothLaunchConfiguration: Sendable {
         }
     }
     func move(_ track: Track, in collection: Collection, by direction: Int) {
-        guard !collection.id.hasPrefix("connected:") else { return }
+        guard !collection.id.hasPrefix("connected:"), allowLocalEdit(collection.id) else { return }
         do { try store.moveTrack(track.id, inCollection: collection.id, by: direction); try reloadCollections() }
         catch { message = error.localizedDescription }
     }
     func archive(_ track: Track) {
+        guard allowLocalEdit(track.id) else { return }
         do { try store.archiveTrack(track.id); try reloadCollections() }
         catch { message = error.localizedDescription }
     }
     func togglePin(_ collection: Collection) {
+        guard allowLocalEdit(collection.id) else { return }
         do { try store.toggleCollectionPin(collection.id); try reloadCollections() }
         catch { message = error.localizedDescription }
     }
     func updateCollection(_ collection: Collection, name: String, mood: String, folderPath: [String]) {
+        guard allowLocalEdit(collection.id) else { return }
         do {
             try store.updateCollection(collection.id, name: name, mood: mood, folderPath: folderPath); try reloadCollections()
         } catch { message = error.localizedDescription }
     }
     func deleteCollection(_ collection: Collection) {
+        guard allowLocalEdit(collection.id) else { return }
         do { try store.deleteCollection(collection.id); try reloadCollections() }
         catch { message = error.localizedDescription }
     }
@@ -1601,7 +1680,7 @@ private struct BoothLaunchConfiguration: Sendable {
         let previous = playbackPreferences?.load()
         restoredSavedPlaybackSession = previous != nil
         let saved = previous ?? PlaybackSession()
-        applyPlaybackSession(saved.resolved(tracks: playbackTracks, collections: collections, additionalFolderPaths: musicProviderNames.map { [$0] }), replacingItem: true)
+        applyPlaybackSession(saved.resolved(tracks: playbackTracks, collections: collections, additionalFolderPaths: musicProviderNames.map { [$0] } + pairedMac.folderPaths), replacingItem: true)
         playbackSessionReady = true
         persistPlaybackSession()
     }
@@ -1613,7 +1692,7 @@ private struct BoothLaunchConfiguration: Sendable {
             saved.selectedCollection = selectedCollection; saved.navigation = currentPlaybackSession().navigation
             saved.filter = filter; saved.query = query
         }
-        let resolved = saved.resolved(tracks: playbackTracks, collections: collections, additionalFolderPaths: musicProviderNames.map { [$0] })
+        let resolved = saved.resolved(tracks: playbackTracks, collections: collections, additionalFolderPaths: musicProviderNames.map { [$0] } + pairedMac.folderPaths)
         playbackSessionReady = false
         applyPlaybackSession(resolved, replacingItem: player.track?.id != resolved.trackID)
         playbackSessionReady = true
@@ -1623,9 +1702,14 @@ private struct BoothLaunchConfiguration: Sendable {
         selectedCollection = session.selectedCollection; filter = session.filter; query = session.query
         applyNavigation(session.navigation)
         #if os(iOS)
-        // Mobile presents playlists directly. Retired search/filter controls must
-        // not leave recordings invisibly filtered out of a restored playlist.
-        filter = "All music"; query = ""; trackSort = browseMode == .playlists ? "default" : "title"; trackSortAscending = true
+        // Only all-Tracks exposes search and sorting. Preserve those controls on
+        // refresh/relaunch without restoring hidden filters into a playlist.
+        filter = "All music"
+        if browseMode != .tracks || selectedCollection != nil {
+            query = ""; trackSort = browseMode == .playlists ? "default" : "title"; trackSortAscending = true
+        } else if !["title", "addedAt"].contains(trackSort) {
+            trackSort = "title"; trackSortAscending = true
+        }
         if selectedCollection == nil { showPlaylistBrowser = browseMode == .playlists }
         #endif
         queueCollection = session.queueCollection; queueFilter = session.queueFilter
@@ -1662,6 +1746,9 @@ private struct BoothLaunchConfiguration: Sendable {
         let queue = preservingQueue ? player.queue : visibleTracks
         let index = queuePosition ?? (preservingQueue ? (player.pendingStreamQueueIndex ?? player.queueIndex) : nil)
         #if os(iOS)
+        // A library selection controls phone playback, not the monitored deck.
+        // Keep its transport visible even while DJ Link equipment is connected.
+        djLink.showingPhonePlayer = true
         // A restored speaker queue already owns its media URLs and metadata.
         // Its controls must work before the local library finishes hydrating.
         let speakerTrack = tracksByID[track.id] ?? track
@@ -1759,7 +1846,8 @@ private struct BoothLaunchConfiguration: Sendable {
             }
             // Do the cheap filesystem check off MainActor. A local hit attaches
             // audio without a second player teardown or session write.
-            let cached = if let hash = track.mediaHash { await audio.existing(hash: hash) } else { nil as URL? }
+            var cached = if let hash = track.mediaHash { await audio.existing(hash: hash) } else { nil as URL? }
+            if cached == nil, track.id.hasPrefix("paired:") { cached = try await offlineAudio(track) }
             guard request == playbackRequest, generation == connectionGeneration,
                   let current = tracksByID[track.id] else { return }
             let workstationAudio = workstationConnected ? workstationTracks[track.id].flatMap { workstation?.audioURL($0) } : nil
@@ -1841,7 +1929,7 @@ private struct BoothLaunchConfiguration: Sendable {
             defer { offlineLaunchActionRunning = false }
             for trackID in collection.trackIDs where !offlineIDs.contains(trackID) {
                 guard !Task.isCancelled, generation == connectionGeneration else { return }
-                guard let track = tracks.first(where: { $0.id == trackID }), track.mediaHash != nil else { continue }
+                guard let track = tracks.first(where: { $0.id == trackID }), track.mediaHash != nil || track.id.hasPrefix("paired:") else { continue }
                 do { _ = try await offlineAudio(track) }
                 catch ClientError.http(404, _) { continue }
                 catch is CancellationError { return }
@@ -1860,7 +1948,7 @@ private struct BoothLaunchConfiguration: Sendable {
             return
         }
         guard let id = pendingOfflineTrackID else { return }
-        guard let track = tracks.first(where: { $0.id == id }), track.mediaHash != nil else {
+        guard let track = tracks.first(where: { $0.id == id }), track.mediaHash != nil || track.id.hasPrefix("paired:") else {
             syncStatus = "Waiting for the requested mix to finish uploading"
             return
         }
@@ -1941,6 +2029,14 @@ private struct BoothLaunchConfiguration: Sendable {
     }
     private func offlineAudio(_ track: Track) async throws -> URL {
         let generation = connectionGeneration
+        if track.id.hasPrefix("paired:") {
+            downloading.insert(track.id)
+            defer { downloading.remove(track.id) }
+            let file = try await pairedMac.download(track, to: audio)
+            guard generation == connectionGeneration else { throw CancellationError() }
+            try await reload()
+            return file
+        }
         if let hash = track.mediaHash, let file = await audio.existing(hash: hash) {
             guard generation == connectionGeneration else { throw CancellationError() }
             offlineIDs.insert(track.id); downloadOfflineCDJAnalysis(); return file
@@ -1994,6 +2090,14 @@ private struct BoothLaunchConfiguration: Sendable {
             if Task.isCancelled || generation != connectionGeneration { break }
             if let track = tracks.first(where: { $0.id == id }) { await keepOffline(track) }
         }
+        guard !Task.isCancelled, generation == connectionGeneration else { return }
+        let saved = collection.trackIDs.filter { offlineIDs.contains($0) }.count
+        if saved == collection.trackIDs.count {
+            syncStatus = "\(collection.name) saved offline"
+        } else {
+            syncStatus = "\(collection.name): \(saved)/\(collection.trackIDs.count) saved offline"
+            message = "\(syncStatus). Retry Download offline to finish the missing tracks."
+        }
     }
     private func applyTrackUpdate(_ track: Track) {
         guard let index = tracks.firstIndex(where: { $0.id == track.id }) else { return }
@@ -2002,6 +2106,16 @@ private struct BoothLaunchConfiguration: Sendable {
     }
     func loadWaveform(_ track: Track) async {
         guard !deferredWaveforms else { deferredWaveformRequests.insert(track.id); return }
+        if track.id.hasPrefix("paired:") {
+            guard track.waveform == nil else { return }
+            let generation = connectionGeneration
+            do {
+                guard let updated = try await pairedMac.loadWaveform(track, from: audio),
+                      generation == connectionGeneration, !Task.isCancelled else { return }
+                applyTrackUpdate(updated)
+            } catch { /* Missing display analysis never interrupts cached playback. */ }
+            return
+        }
         if track.id.hasPrefix("usb:") {
             guard track.waveform == nil, !loadingUSBWaveforms.contains(track.id), !unavailableUSBWaveforms.contains(track.id), let access = usbDevice,
                   let location = try? store.usbFile(track.id) else { return }

@@ -14,6 +14,8 @@ public struct Track: Codable, Identifiable, Sendable, Equatable {
     public var bpm: Double?
     public var durationSeconds: Double?
     public var artworkAvailable: Bool
+    /// Optional immutable cover bytes; never a remote URL or credential.
+    public var artworkHash: String?
     public var fileExists: Bool
     public var analyzed: Bool
     public var hosted: HostedTrack?
@@ -22,19 +24,27 @@ public struct Track: Codable, Identifiable, Sendable, Equatable {
     public var mediaExtension: String?
     public var analysis: CDJAnalysis?
     public var waveform: Waveform?
+    /// Revision of a paired workstation recording, not a cloud sync sequence.
+    public var sourceRevision: String?
+    /// When the recording entered its source library, not its file modification date.
+    public var addedAt: String?
 
     public init(id: String, title: String, artist: String? = nil, album: String? = nil,
                 genre: String? = nil, key: String? = nil, bpm: Double? = nil,
                 durationSeconds: Double? = nil, artworkAvailable: Bool = false,
                 fileExists: Bool = false, analyzed: Bool = false, hosted: HostedTrack? = nil,
-                mediaHash: String? = nil, mediaExtension: String? = nil, waveform: Waveform? = nil, analysis: CDJAnalysis? = nil) {
+                mediaHash: String? = nil, mediaExtension: String? = nil, waveform: Waveform? = nil, analysis: CDJAnalysis? = nil,
+                sourceRevision: String? = nil, artworkHash: String? = nil, addedAt: String? = nil) {
         self.id = id; self.title = title; self.artist = artist; self.album = album
         self.genre = genre; self.key = key; self.bpm = bpm; self.durationSeconds = durationSeconds
         self.artworkAvailable = artworkAvailable; self.fileExists = fileExists
+        self.artworkHash = artworkHash
         self.analyzed = analyzed; self.hosted = hosted; self.mediaHash = mediaHash
         self.mediaExtension = mediaExtension
         self.analysis = analysis
         self.waveform = waveform
+        self.sourceRevision = sourceRevision
+        self.addedAt = addedAt
     }
     public var source: String { hosted?.provider.capitalized ?? "Library" }
     public var localContentID: String? { hosted == nil ? id : hosted?.localContentId }

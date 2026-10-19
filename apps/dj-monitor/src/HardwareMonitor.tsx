@@ -14,6 +14,7 @@ import { useHardwareMonitor } from "./useHardwareMonitor.js";
 import { useTrackWaveform } from "./useTrackWaveform.js";
 import cdj3000Image from "./assets/CDJ-3000_top.webp";
 import djmA9Image from "./assets/djm-a9_2.png";
+import omnisDuoImage from "./assets/OMNIS-DUO_top.webp";
 
 const CDJ_3000_IMAGE = cdj3000Image;
 const DJM_A9_IMAGE = djmA9Image;
@@ -91,6 +92,27 @@ export function HardwareMonitor({
   mode = "live",
 }: HardwareMonitorProps & { mode?: "live" | "replay" }) {
   const decks = monitorDecks(snapshot.decks);
+  const omnisDecks = snapshot.decks
+    .filter((deck) => deck.model?.toUpperCase() === "OMNIS-DUO")
+    // OMNIS reuses CDJ flag bits even while paused. Its explicit transport
+    // state is authoritative; never animate a paused or disconnected deck.
+    .map((deck) => ({
+      ...deck,
+      connected: deck.connected && status === "live",
+      playing:
+        deck.connected &&
+        status === "live" &&
+        ["playing", "looping", "cue-playing", "moving-alt"].includes(deck.playState ?? ""),
+    }))
+    .sort((a, b) => a.player - b.player);
+
+  if (omnisDecks.length) {
+    return (
+      <main className="monitor-shell omnis-monitor">
+        <OmnisDuo decks={omnisDecks} />
+      </main>
+    );
+  }
 
   return (
     <main className="monitor-shell">
@@ -126,6 +148,107 @@ export function HardwareMonitor({
 
       <Activity events={activity} />
     </main>
+  );
+}
+
+function OmnisDuo({ decks }: { decks: DeckState[] }) {
+  const [focused, setFocused] = useState(false);
+  return (
+    <section
+      className={`omnis-booth ${focused ? "is-focused" : ""}`}
+      aria-label="OMNIS-DUO two-deck monitor"
+    >
+      <div className="omnis-hardware">
+        <img
+          src={omnisDuoImage}
+          alt="AlphaTheta OMNIS-DUO: two decks and integrated two-channel mixer"
+          title="Hardware reference. Mixer controls and meters are not available over Wi-Fi."
+        />
+        <div
+          className="omnis-meter-mask"
+          title="Mixer levels are not available over this Wi-Fi connection"
+        />
+        {decks.map((deck) => (
+          <div
+            key={deck.player}
+            className={`omnis-deck-indicators deck-${deck.player === 11 ? 1 : 2}`}
+          >
+            <span className={`omnis-jog-ring ${deck.playing ? "is-playing" : ""}`} />
+            <span
+              className={`omnis-play-indicator ${deck.playing ? "lit" : ""}`}
+              title={deck.playing ? "Playing" : "Stopped"}
+            />
+            <span
+              className={`omnis-cue-indicator ${deck.playState === "cued" ? "lit" : ""}`}
+              title={deck.playState === "cued" ? "Cued" : "Cue inactive"}
+            />
+          </div>
+        ))}
+        <div className="omnis-display">
+          <header className="omnis-display-nav">
+            <b>WAVEFORM</b>
+            <span>{decks.some((deck) => deck.connected) ? "LINK" : "OFFLINE"}</span>
+          </header>
+          {decks.map((deck) => (
+            <OmnisDeck key={deck.player} deck={deck} />
+          ))}
+          <button
+            className="omnis-display-zoom"
+            type="button"
+            aria-label={focused ? "Show hardware" : "Expand display"}
+            title={focused ? "Show hardware" : "Expand display"}
+            aria-pressed={focused}
+            onClick={() => setFocused(!focused)}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") setFocused(false);
+            }}
+          />
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function OmnisDeck({ deck }: { deck: DeckState }) {
+  const waveform = useTrackWaveform(deck.trackId, deck.sourcePlayer, deck.sourceSlot);
+  const duration = deck.trackLengthSec ?? waveform?.durationSeconds ?? null;
+  const playhead = useDeckPlayhead(
+    deck,
+    duration,
+    beatGridPositionMs(deck.beatNumber, waveform?.beatGrid),
+  );
+  const physicalDeck = deck.player === 11 ? 1 : 2;
+  return (
+    <article
+      className={`omnis-deck ${deck.playing ? "is-playing" : ""}`}
+      aria-label={`OMNIS-DUO deck ${physicalDeck}`}
+    >
+      <header>
+        <strong className="omnis-deck-number">{physicalDeck}</strong>
+        <div className="omnis-track-name">
+          <h2>{deck.trackTitle ?? (deck.trackId ? "Loading track…" : "No track loaded")}</h2>
+          <p>{deck.trackArtist || "—"}</p>
+        </div>
+        <b>{deck.tempoMaster ? "MASTER" : deck.synced ? "SYNC" : ""}</b>
+      </header>
+      <CdjWaveform playheadMs={playhead} bpm={deck.bpm} waveform={waveform} />
+      <dl>
+        <div>
+          <dt>{deck.connected ? (deck.playState ?? "Connected") : "Offline"}</dt>
+          <dd>
+            {formatTime(playhead)} / {formatDuration(duration)}
+          </dd>
+        </div>
+        <div>
+          <dt>BPM</dt>
+          <dd>{formatBpm(deck.effectiveBpm ?? deck.bpm)}</dd>
+        </div>
+        <div>
+          <dt>Pitch</dt>
+          <dd>{formatPitch(deck.pitchPercent)}</dd>
+        </div>
+      </dl>
+    </article>
   );
 }
 

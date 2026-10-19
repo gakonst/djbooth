@@ -12,13 +12,24 @@ struct DJLinkStatus: Decodable, Sendable {
     struct Device: Decodable, Identifiable, Sendable {
         let player: Int
         let ip, model: String
-        var id: String { ip }
+        var id: String { "\(ip):\(player)" }
+        var isOmnis: Bool { model.uppercased() == "OMNIS-DUO" }
+        var displayPlayer: Int { isOmnis && (11...12).contains(player) ? player - 10 : player }
     }
     var running: Bool
     var ip: String?
     var trackCount: Int?
     var playlistCount: Int?
     var devices: [Device]?
+    /// Discovery identifies appliances; monitoring and selection identify decks.
+    var deckDevices: [Device] {
+        (devices ?? []).flatMap { device -> [Device] in
+            if device.isOmnis {
+                return [11, 12].map { Device(player: $0, ip: device.ip, model: device.model) }
+            }
+            return (1...6).contains(device.player) ? [device] : []
+        }.sorted { $0.player < $1.player }
+    }
 }
 struct DJLinkDeck: Identifiable, Equatable, Sendable {
     let state: DJLinkDeckState
@@ -26,6 +37,7 @@ struct DJLinkDeck: Identifiable, Equatable, Sendable {
     let libraryTrackID: String?
     var waveform: Waveform? = nil
     var libraryKey: String? = nil
+    var observedAt: Double = ProcessInfo.processInfo.systemUptime
     var id: Int { state.player }
     func presentationTrack(in tracks: [String: Track]) -> Track? {
         guard let trackID = state.track_id else { return nil }
@@ -46,6 +58,7 @@ private actor DJLinkEngine {
     private var directory: URL?
     private var preparation = UUID()
     private var presentationByDeck: [Int: (track: UInt32?, canonical: String?, waveform: Waveform?, key: String?)] = [:]
+    private var previousDecks: [DJLinkDeck] = []
     private func request<T: Decodable>(_ operation: String, input: String = "{}", as type: T.Type) throws -> T {
         try DJLinkBindings.decode(operation, input: input, as: type)
     }
@@ -92,11 +105,12 @@ private actor DJLinkEngine {
     }
     func status() throws -> (DJLinkStatus, [DJLinkDeck], [String: DJLinkMixerObservation]) {
         let status = try request("status", as: DJLinkStatus.self)
-        guard status.running else { return (status, [], [:]) }
+        guard status.running else { previousDecks = []; return (status, [], [:]) }
         struct Snapshot: Decodable { let deck: DJLinkDeckState? }
         struct Metadata: Decodable { let track_id: UInt32; let key: String? }
         var decks: [DJLinkDeck] = []
-        for device in status.devices ?? [] where (1...6).contains(device.player) {
+        for device in status.deckDevices {
+            let observedAt = ProcessInfo.processInfo.systemUptime
             let snapshot = try request("server.monitor_snapshot", input: "{\"player\":\(device.player)}", as: Snapshot.self)
             guard let state = snapshot.deck else { continue }
             // USB mobile browsing can report the deck itself as source_player.
@@ -115,8 +129,12 @@ private actor DJLinkEngine {
                 waveform = try request("server.library_waveform", input: "{\"track_id\":\(id)}", as: DJLinkWaveform?.self)?.waveform
             }
             presentationByDeck[state.player] = (state.track_id, canonical, waveform, key)
-            decks.append(DJLinkDeck(state: state, model: device.model, libraryTrackID: canonical, waveform: waveform, libraryKey: key))
+            // Repeated cached snapshots must not renew a stalled render clock.
+            let previous = previousDecks.first { $0.id == state.player && $0.state == state }
+            decks.append(DJLinkDeck(state: state, model: device.model, libraryTrackID: canonical, waveform: waveform,
+                                    libraryKey: key, observedAt: previous?.observedAt ?? observedAt))
         }
+        previousDecks = decks
         do {
             return (status, decks, try mixerStatus())
         } catch {
@@ -131,8 +149,10 @@ private actor DJLinkEngine {
         }
     }
     private struct Prepared {
+        let revision = UUID()
         let source: [Track]
         let collections: [Collection]
+        let folderNames: [String: String]
         let annotations: [String: TrackAnnotation]
         let audio: URL
         let availableArtifacts: Set<String>
@@ -141,6 +161,7 @@ private actor DJLinkEngine {
         let omitted: Int
     }
     private var cached: Prepared?
+    private var publishedRevision: UUID?
     func recordingLibrary() throws -> Data {
         try JSONEncoder().encode(cached?.tracks ?? [])
     }
@@ -148,17 +169,19 @@ private actor DJLinkEngine {
         FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("DJBooth-DJLink/v1", isDirectory: true)
     }
-    func warm(tracks: [Track], collections: [Collection], annotations: [String: TrackAnnotation], audio: URL) async throws {
+    @discardableResult
+    func warm(tracks: [Track], collections: [Collection], folderNames: [String: String], annotations: [String: TrackAnnotation], audio: URL) async throws -> Bool {
         await AppDiagnostics.shared.ready()
-        _ = try prepare(tracks: tracks, collections: collections, annotations: annotations, audio: audio)
+        return try !prepare(tracks: tracks, collections: collections, folderNames: folderNames, annotations: annotations, audio: audio).tracks.isEmpty
     }
-    private func prepare(tracks: [Track], collections: [Collection], annotations: [String: TrackAnnotation], audio: URL) throws -> Prepared {
+    private func prepare(tracks: [Track], collections: [Collection], folderNames: [String: String], annotations: [String: TrackAnnotation], audio: URL) throws -> Prepared {
         // Only fields consumed by DJLinkLibrary invalidate this projection.
         // UI waveform hydration, download flags and sync timestamps do not.
         let source = tracks.map {
             Track(id: $0.id, title: $0.title, artist: $0.artist, album: $0.album, genre: $0.genre,
                   key: $0.key, bpm: $0.bpm, durationSeconds: $0.durationSeconds,
-                  mediaHash: $0.mediaHash, mediaExtension: $0.mediaExtension, analysis: $0.analysis)
+                  mediaHash: $0.mediaHash, mediaExtension: $0.mediaExtension, analysis: $0.analysis,
+                  artworkHash: $0.artworkHash)
         }.sorted { $0.id < $1.id }
         let collectionSource = collections.map {
             Collection(id: $0.id, name: $0.name, trackIDs: $0.trackIDs, folderPath: $0.folderPath)
@@ -169,6 +192,7 @@ private actor DJLinkEngine {
         let availableArtifacts = Set(try FileManager.default.contentsOfDirectory(atPath: audio.path)
             .filter { $0.hasSuffix(".audio") })
         if let cached, cached.source == source, cached.collections == collectionSource,
+           cached.folderNames == folderNames,
            cached.availableArtifacts == availableArtifacts,
            cached.annotations == annotationSource, cached.audio == audio,
            cached.tracks.allSatisfy({ row in
@@ -189,11 +213,10 @@ private actor DJLinkEngine {
         }
         let began = ProcessInfo.processInfo.systemUptime
         let library = try DJLinkLibrary.prepare(tracks: tracks, collections: collections, annotations: annotations,
-                                               audioDirectory: audio, sessionDirectory: folder, idForIdentity: { identity in
+                                               audioDirectory: audio, sessionDirectory: folder, folderNames: folderNames, idForIdentity: { identity in
             let input = try JSONEncoder().encode(["value": identity])
             return try self.request("function.stable_text_id", input: String(decoding: input, as: UTF8.self), as: UInt32.self)
         })
-        guard !library.tracks.isEmpty else { throw LinkError(message: "Download a playlist and its CDJ analysis files before connecting. Sync the phone after publishing analyzed tracks from your Mac.") }
         struct Prepare: Encodable { let audioPath, outputDirectory: String }
         struct Analysis: Decodable { let dat, ext, twoEx: String }
         var ready = library.tracks
@@ -208,18 +231,19 @@ private actor DJLinkEngine {
             ready[index].analysisTwoexPath = analysis.twoEx
         }
 
-        let prepared = Prepared(source: source, collections: collectionSource, annotations: annotationSource, audio: audio,
+        let prepared = Prepared(source: source, collections: collectionSource, folderNames: folderNames, annotations: annotationSource, audio: audio,
                                 availableArtifacts: availableArtifacts,
                                 tracks: ready, playlists: library.playlists, omitted: library.omittedTracks)
         cached = prepared
         AppDiagnostics.shared.event("cdj_library_ready", ["tracks": String(ready.count), "duration_ms": String(Int((ProcessInfo.processInfo.systemUptime - began) * 1000))])
         return prepared
     }
-    func start(interface: DJLinkInterface, unicastDiscovery: Bool, tracks: [Track], collections: [Collection], annotations: [String: TrackAnnotation], audio: URL) async throws -> (DJLinkStatus, Int) {
+    func start(interface: DJLinkInterface, unicastDiscovery: Bool, tracks: [Track], collections: [Collection], folderNames: [String: String], annotations: [String: TrackAnnotation], audio: URL) async throws -> (DJLinkStatus, Int) {
         await AppDiagnostics.shared.ready()
         guard directory == nil else { throw LinkError(message: "Disconnect before reconnecting.") }
         let generation = UUID(); preparation = generation
-        let library = try prepare(tracks: tracks, collections: collections, annotations: annotations, audio: audio)
+        let library = try prepare(tracks: tracks, collections: collections, folderNames: folderNames, annotations: annotations, audio: audio)
+        guard !library.tracks.isEmpty else { throw LinkError(message: "No downloaded tracks with DJ Link analysis are available on this iPhone.") }
         guard generation == preparation, !Task.isCancelled else { throw CancellationError() }
         struct Start: Encodable {
             let bindIp, broadcastIp: String
@@ -243,7 +267,64 @@ private actor DJLinkEngine {
                                                  tracks: library.tracks, playlists: library.playlists))
         let status = try request("start", input: String(decoding: data, as: UTF8.self), as: DJLinkStatus.self)
         directory = folder
+        publishedRevision = library.revision
         return (status, library.omitted)
+    }
+    func refreshLibrary(tracks: [Track], collections: [Collection], folderNames: [String: String],
+                        annotations: [String: TrackAnnotation], audio: URL) throws -> Int {
+        guard directory != nil else { throw LinkError(message: "DJ Link is not running.") }
+        let library = try prepare(tracks: tracks, collections: collections, folderNames: folderNames, annotations: annotations, audio: audio)
+        try publish(library)
+        return library.omitted
+    }
+    private func publish(_ library: Prepared) throws {
+        guard publishedRevision != library.revision else { return }
+        // Publish new downloads without restarting the source or invalidating
+        // files already in use by the other deck.
+        struct Snapshot: Encodable {
+            let master_db_id = 1
+            let tracks_by_id: [String: DJLinkLibrary.TrackRow]
+            let all_tracks: [DJLinkLibrary.TrackRow]
+            let playlists: [DJLinkLibrary.PlaylistRow]
+        }
+        struct Refresh: Encodable { let library: Snapshot }
+        struct Refreshed: Decodable { let tracks: Int }
+        let snapshot = Snapshot(tracks_by_id: Dictionary(uniqueKeysWithValues: library.tracks.map { (String($0.trackId), $0) }),
+                                all_tracks: library.tracks, playlists: library.playlists)
+        let refresh = try JSONEncoder().encode(Refresh(library: snapshot))
+        _ = try request("server.refresh_library", input: String(decoding: refresh, as: UTF8.self), as: Refreshed.self)
+        publishedRevision = library.revision
+        presentationByDeck.removeAll()
+        AppDiagnostics.shared.event("cdj_library_published", ["tracks": String(library.tracks.count), "playlists": String(library.playlists.count)])
+    }
+    func load(trackID: String, device: DJLinkStatus.Device, tracks: [Track], collections: [Collection],
+              folderNames: [String: String], annotations: [String: TrackAnnotation], audio: URL) throws {
+        guard directory != nil else { throw LinkError(message: "Turn on Share over Wi-Fi before loading a deck.") }
+        let library = try prepare(tracks: tracks, collections: collections, folderNames: folderNames, annotations: annotations, audio: audio)
+        guard let track = library.tracks.first(where: { $0.canonicalName == trackID }) else {
+            throw LinkError(message: "Keep this track on your iPhone with its DJ Link analysis before loading it onto a deck.")
+        }
+        try publish(library)
+        let (current, decks, _) = try status()
+        guard current.running, current.deckDevices.contains(where: { $0.id == device.id }),
+              let deck = decks.first(where: { $0.id == device.player }) else {
+            throw LinkError(message: "The deck is no longer connected. Wait for its status before loading.")
+        }
+        guard !deck.state.playing else { throw LinkError(message: "Pause this deck before loading another track.") }
+        struct Interval: Encodable { let secs = 0; let nanos = 250_000_000 }
+        struct Load: Encodable {
+            let target_player: Int
+            let track_id: UInt32
+            let source_player: Int? = nil
+            let source_slot = 4
+            let source_track_type = 1
+            let `repeat` = 1
+            let interval = Interval()
+        }
+        let input = try JSONEncoder().encode(Load(target_player: device.player, track_id: track.trackId))
+        // Rust maps OMNIS 11/12 to physical 1/2 and confirms the requested
+        // track/source on that exact deck. This never sends Play.
+        _ = try request("server.send_load_track", input: String(decoding: input, as: UTF8.self), as: Int.self)
     }
     func stop() throws {
         presentationByDeck.removeAll()
@@ -252,6 +333,7 @@ private actor DJLinkEngine {
         preparation = UUID()
         _ = try request("stop", as: DJLinkStatus.self)
         directory = nil
+        publishedRevision = nil
     }
 }
 
@@ -274,6 +356,8 @@ private actor DJLinkEngine {
     }
     var interfaces: [DJLinkInterface] = []
     var selectedIP = ""
+    // Opt-in: never advertise the phone's library on Wi-Fi just by launching the app.
+    var wifiEnabled = false
     var status = DJLinkStatus(running: false)
     var decks: [DJLinkDeck] = []
     var mixers: [String: DJLinkMixerObservation] = [:]
@@ -293,7 +377,13 @@ private actor DJLinkEngine {
     // not an assertion about the user's physical audio wiring.
     private var channelAssignments: [Int: Int] = [:]
     var detectedDecks: [DJLinkStatus.Device] {
-        (status.devices ?? []).filter { (1...6).contains($0.player) }.sorted { $0.player < $1.player }
+        status.deckDevices
+    }
+    func playerLabel(_ player: Int) -> String {
+        guard let device = detectedDecks.first(where: { $0.player == player }), device.isOmnis else {
+            return "Player \(player)"
+        }
+        return "OMNIS · Deck \(device.displayPlayer)"
     }
     var selectedMixer: DJLinkMixerObservation? {
         if let selectedMixerIP { return mixers[selectedMixerIP] }
@@ -309,7 +399,7 @@ private actor DJLinkEngine {
     }
     var selectedPlayer: Int?
     var showingPhonePlayer = false
-    var cableDetected: Bool { lifecycle.attachment != nil || !wiredNames.isEmpty || !usbWiredNames.isEmpty }
+    var cableDetected: Bool { !wiredNames.isEmpty || !usbWiredNames.isEmpty }
     var waitingForWiredAddress: Bool { cableDetected && automaticInterface == nil }
     /// Presentation only. Never suggest a Wi-Fi, Mac USB, or routed-network
     /// address: a real deck must have answered on this selected interface.
@@ -325,6 +415,34 @@ private actor DJLinkEngine {
     }
     var busy = false
     var error: String?
+    var libraryRefreshError: String?
+    var loadingTrackID: String?
+    func load(_ track: Track, on device: DJLinkStatus.Device, model: BoothModel) async -> Bool {
+        guard loadingTrackID == nil, !busy else { return false }
+        let request = generation
+        loadingTrackID = track.id
+        defer { loadingTrackID = nil }
+        do {
+            guard status.running, let deck = decks.first(where: { $0.id == device.player }) else {
+                throw LinkError(message: "Wait for the deck to connect before loading a track.")
+            }
+            guard !deck.state.playing else { throw LinkError(message: "Pause this deck before loading another track.") }
+            guard !model.demo else { throw LinkError(message: "Demo decks cannot receive music. Connect your OMNIS to load a track.") }
+            try await engine.load(trackID: track.id, device: device, tracks: model.tracks,
+                                  collections: model.playlistCollections, folderNames: model.pairedMac.folderNames,
+                                  annotations: model.annotations, audio: model.audio.directory)
+            guard generation == request, !Task.isCancelled else { return false }
+            selectedPlayer = device.player
+            showingPhonePlayer = false
+            nextStatusAt = 0
+            await autoConnect(model: model)
+            return true
+        } catch {
+            if generation == request, !(error is CancellationError) { model.message = error.localizedDescription }
+            return false
+        }
+    }
+    var waitingForLibrary = false
     var omittedTracks = 0
     private var wiredNames: Set<String> = []
     private var wirelessNames: Set<String> = ["en0"]
@@ -339,6 +457,7 @@ private actor DJLinkEngine {
     private var checking = false
     private var checkAgain = false
     private var nextStatusAt: TimeInterval = 0
+    private var nextLibraryAt: TimeInterval = 0
     private var nextInterfaceAt: TimeInterval = 0
     private var reportedInterfaces = ""
     private var reportedAutomaticState = ""
@@ -399,6 +518,16 @@ private actor DJLinkEngine {
         status = DJLinkStatus(running: true, trackCount: decks.count, devices: decks.map {
             DJLinkStatus.Device(player: $0.id, ip: "192.0.2.\($0.id)", model: $0.model)
         })
+        if ProcessInfo.processInfo.arguments.contains("--ui-test-omnis") {
+            decks = [DJLinkDeck(state: try deck(11, playing: false), model: "OMNIS-DUO", libraryTrackID: "demo-5", waveform: decks.first?.waveform),
+                     DJLinkDeck(state: try deck(12, playing: true), model: "OMNIS-DUO", libraryTrackID: "demo-7", waveform: decks.last?.waveform)]
+            status = DJLinkStatus(running: true, trackCount: 2, devices: [
+                DJLinkStatus.Device(player: 11, ip: "192.0.2.11", model: "OMNIS-DUO")
+            ])
+        }
+        if ProcessInfo.processInfo.arguments.contains("--ui-test-missing-deck-status") {
+            decks.removeLast()
+        }
     }
     #endif
 
@@ -507,7 +636,7 @@ private actor DJLinkEngine {
         let run = UUID(); monitorGeneration = run
         monitoredModel = model
         let warmup = Task { [engine] in
-            try? await engine.warm(tracks: model.tracks, collections: model.playlistCollections,
+            try? await engine.warm(tracks: model.tracks, collections: model.playlistCollections, folderNames: model.pairedMac.folderNames,
                                    annotations: model.annotations, audio: model.audio.directory)
         }
         defer {
@@ -567,21 +696,49 @@ private actor DJLinkEngine {
             nextInterfaceAt = now + 0.125
         }
         guard generation == request, !Task.isCancelled, !busy, canRun else { return }
-        let wired = automaticInterface
-        let changed = lifecycle.observe(wired?.id)
+        let interface = automaticInterface
+        let changed = lifecycle.observe(interface?.id)
         if changed {
-            AppDiagnostics.shared.event("cdj_attachment_changed", ["interface": wired?.id ?? "detached"])
+            AppDiagnostics.shared.event("cdj_attachment_changed", ["interface": interface?.id ?? "detached"])
         }
-        guard let wired else {
+        guard let interface else {
+            waitingForLibrary = false
             if status.running { await disconnect() }
-            reportAutomaticState("waiting_for_wired_interface")
+            reportAutomaticState(wifiEnabled ? "waiting_for_wifi_interface" : "waiting_for_wired_interface")
             return
         }
-        reportAutomaticState("wired_interface_ready:\(wired.id)")
-        if status.running && activeInterfaceID != wired.id { await disconnect() }
+        reportAutomaticState("interface_ready:\(interface.id)")
+        if status.running && activeInterfaceID != interface.id { await disconnect() }
         guard !Task.isCancelled, !busy, canRun else { return }
         if status.running {
             let now = ProcessInfo.processInfo.systemUptime
+            if now >= nextLibraryAt, loadingTrackID == nil {
+                nextLibraryAt = now + 1
+                do {
+                    // Cover backfills update the paired snapshot independently of library reloads.
+                    let paired = Dictionary(uniqueKeysWithValues: model.pairedMac.tracks.map { ($0.id, $0.artworkHash) })
+                    let tracks = model.tracks.map { original in
+                        var track = original
+                        if let hash = paired[track.id] { track.artworkHash = hash }
+                        return track
+                    }
+                    let omitted = try await engine.refreshLibrary(tracks: tracks, collections: model.playlistCollections,
+                                                                 folderNames: model.pairedMac.folderNames, annotations: model.annotations,
+                                                                 audio: model.audio.directory)
+                    guard generation == request, !Task.isCancelled, !busy, canRun else { return }
+                    omittedTracks = omitted
+                    libraryRefreshError = nil
+                } catch {
+                    guard generation == request, !Task.isCancelled, !busy, canRun else { return }
+                    // Retain the last published generation and serving sockets.
+                    // A failed update must not interrupt a deck already playing.
+                    if libraryRefreshError != error.localizedDescription {
+                        AppDiagnostics.shared.event("cdj_library_publish_failed", ["error": error.localizedDescription])
+                    }
+                    libraryRefreshError = error.localizedDescription
+                    nextLibraryAt = now + 3
+                }
+            }
             if now >= nextStatusAt {
                 let request = generation
                 do {
@@ -611,7 +768,7 @@ private actor DJLinkEngine {
             return
         }
         guard lifecycle.mayStart(at: ProcessInfo.processInfo.systemUptime) else { return }
-        selectedIP = wired.ip
+        selectedIP = interface.ip
         await connect(model: model)
     }
 
@@ -628,7 +785,7 @@ private actor DJLinkEngine {
             let (available, selected) = try await engine.interfaces(excluding: excluded)
             guard generation == request, !Task.isCancelled else { return }
             if interfaces != available { interfaces = available }
-            automaticInterface = selected
+            automaticInterface = wifiEnabled ? available.first(where: { $0.name == "en0" }) : selected
             let description = interfaces.map { "\($0.name)=\($0.ip)/\($0.netmask)" }.joined(separator: ", ")
             if description != reportedInterfaces {
                 reportedInterfaces = description
@@ -647,9 +804,7 @@ private actor DJLinkEngine {
         guard !Task.isCancelled, canRun,
               !busy, !status.running, let interface = interfaces.first(where: { $0.ip == selectedIP }) else { return }
         let request = UUID(); generation = request
-        AppDiagnostics.shared.event("cdj_connect_started", ["connection": request.uuidString, "interface": interface.name, "ip": interface.ip])
-        busy = true; error = nil
-        UIApplication.shared.isIdleTimerDisabled = true
+        let shareOverWiFi = wifiEnabled
         defer {
             if generation == request {
                 busy = false
@@ -657,8 +812,22 @@ private actor DJLinkEngine {
             }
         }
         do {
+            // Missing downloads are a stable readiness state, not a failed
+            // connection. Recheck the cached projection without flickering busy/error.
+            let ready = try await engine.warm(tracks: model.tracks, collections: model.playlistCollections, folderNames: model.pairedMac.folderNames,
+                                              annotations: model.annotations, audio: model.audio.directory)
+            guard generation == request, wifiEnabled == shareOverWiFi, !Task.isCancelled, canRun else { return }
+            waitingForLibrary = !ready
+            guard ready else {
+                error = nil
+                lifecycle.failed(at: ProcessInfo.processInfo.systemUptime)
+                return
+            }
+            AppDiagnostics.shared.event("cdj_connect_started", ["connection": request.uuidString, "interface": interface.name, "ip": interface.ip])
+            busy = true; error = nil
+            UIApplication.shared.isIdleTimerDisabled = true
             let result = try await engine.start(interface: interface, unicastDiscovery: !broadcastEnabled,
-                                                tracks: model.tracks, collections: model.playlistCollections,
+                                                tracks: model.tracks, collections: model.playlistCollections, folderNames: model.pairedMac.folderNames,
                                                 annotations: model.annotations, audio: model.audio.directory)
             guard generation == request else { return }
             status = result.0; omittedTracks = result.1
@@ -670,6 +839,8 @@ private actor DJLinkEngine {
             activeInterfaceID = interface.id
             lifecycle.resetRetry()
             nextStatusAt = 0
+            nextLibraryAt = 0
+            libraryRefreshError = nil
         } catch {
             guard generation == request else { return }
             lifecycle.failed(at: ProcessInfo.processInfo.systemUptime)
@@ -685,6 +856,8 @@ private actor DJLinkEngine {
         AppDiagnostics.shared.event("cdj_disconnect", ["connection": generation.uuidString, "reason": message ?? "lifecycle_or_interface_change"])
         lifecycle.resetRetry()
         activeInterfaceID = nil
+        waitingForLibrary = false
+        libraryRefreshError = nil
         decks = []; mixers = [:]; selectedPlayer = nil; showingPhonePlayer = false
         let request = UUID(); generation = request
         busy = true
@@ -711,33 +884,49 @@ struct DJLinkConnectionView: View {
             Form {
                 Section {
                     Text("Play from your iPhone").font(.title2.bold())
-                    Text("Keep DJBooth open and connect the phone to the CDJ’s rear USB port. Sharing starts automatically when the wired network is ready. Choose DJ Booth iPhone on the CDJ’s LINK/source screen.")
-                    Text("An Ethernet adapter connected to the CDJ network also works.").font(.caption).foregroundStyle(.secondary)
+                    Text("Keep DJBooth open. Connect a CDJ by USB or Ethernet, or join the same Wi-Fi network as your OMNIS-DUO. Choose djbooth-phone on the deck’s LINK/source screen.")
+                    Toggle("Share over Wi-Fi (OMNIS-DUO)", isOn: $model.djLink.wifiEnabled)
+                        .disabled(link.busy)
+                        .accessibilityIdentifier("djlink.wifi")
+                    Text("Shares downloaded music from this iPhone. It does not connect to or copy your Mac’s library.").font(.caption).foregroundStyle(.secondary)
+                    Text("Wi-Fi sharing is optional and needs no cloud account. Use a trusted network. Local Network access must be allowed in iPhone Settings.").font(.caption).foregroundStyle(.secondary)
+                    if link.status.running {
+                        Text("Changing the connection interrupts music served from this phone.").font(.caption).foregroundStyle(.secondary)
+                    }
                 }
                 Section("Connection") {
                     if let download = model.cdjDownloadStatus {
                         ProgressView(download).font(.caption)
                     }
                     if link.status.running {
-                        Label(link.status.devices?.isEmpty == false ? "DJ equipment found" : "Looking for CDJs…", systemImage: "network")
+                        Label(link.status.devices?.isEmpty == false ? "DJ equipment found" : "Looking for decks…", systemImage: "network")
                             .accessibilityIdentifier("djlink.status")
                         ForEach(link.status.devices ?? []) { device in
-                            LabeledContent(device.model, value: "Player \(device.player) · \(device.ip)")
+                            LabeledContent(device.model, value: device.isOmnis ? "2 decks · \(device.ip)" : "Player \(device.player) · \(device.ip)")
                         }
                         if link.status.devices?.isEmpty != false {
-                            Text("Allow Local Network access in iPhone Settings. Check the cable and that the CDJs are connected to the same DJ Link network.")
+                            Text("Allow Local Network access in iPhone Settings. Check that the phone and decks are on the same network, without client isolation.")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                         if !link.broadcastEnabled, link.status.devices?.isEmpty != false {
                             Text("Discovering decks automatically. Large networks with 169.254 addresses can take several minutes to search.")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
+                    } else if link.waitingForLibrary {
+                        Label("No music ready to share", systemImage: "music.note")
+                            .accessibilityIdentifier("djlink.waitingForLibrary")
+                        Text("This iPhone needs downloaded audio and DJ Link analysis before it can appear on the deck. Your Mac’s library is not synced to this phone automatically.")
+                            .font(.caption).foregroundStyle(.secondary)
                     } else {
-                        Label(link.waitingForWiredAddress ? "Waiting for a wired address…" : "Waiting for a CDJ", systemImage: "cable.connector")
-                        Text(link.waitingForWiredAddress ? "iPhone is setting up the wired network. This can take about 20 seconds." : "Plug in the cable. Connection starts automatically.")
+                        Label(link.wifiEnabled ? "Waiting for Wi-Fi…" : link.waitingForWiredAddress ? "Waiting for a wired address…" : "Waiting for a deck", systemImage: link.wifiEnabled ? "wifi" : "cable.connector")
+                        Text(link.wifiEnabled ? "Join the same Wi-Fi network as your OMNIS-DUO. Sharing starts when local audio and analysis are available." : link.waitingForWiredAddress ? "iPhone is setting up the wired network. This can take about 20 seconds." : "Plug in the cable. Connection starts automatically.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     if let error = link.error { Text(error).foregroundStyle(.red).accessibilityIdentifier("djlink.error") }
+                    if let error = link.libraryRefreshError {
+                        Text("Library update will retry: \(error). Previously shared tracks remain available.")
+                            .font(.caption).foregroundStyle(.red)
+                    }
                 }
                 Section {
                     NavigationLink {
@@ -758,7 +947,7 @@ struct DJLinkConnectionView: View {
                         Text("\(link.omittedTracks) tracks need audio or CDJ analysis downloads, or use an unsupported file type.").font(.caption)
                     }
                 }
-            }.navigationTitle("CDJs")
+            }.navigationTitle("DJ Link")
                 .toolbar { Button("Done") { dismiss() } }
                 .task { await link.refresh() }
         }

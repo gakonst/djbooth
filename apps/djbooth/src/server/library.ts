@@ -439,7 +439,8 @@ export class RekordboxLibraryService {
       this.database = this.open();
       this.databaseFilesVersion = this.captureDatabaseFilesVersion(this.database);
     }
-    this.database.expireIdentityMap();
+    // A readSnapshot transaction shares one identity map until its snapshot ends.
+    if (!this.database.connection?.inTransaction) this.database.expireIdentityMap();
     return this.database;
   }
 
@@ -490,6 +491,13 @@ export class RekordboxLibraryService {
   /** Return the canonical database path without recomputing library health statistics. */
   getDatabasePath(): string {
     return realpathSync(this.getDatabase().path);
+  }
+
+  /** Read related projections in one SQLite snapshot, including external edits. */
+  readSnapshot<T>(read: () => T): T {
+    const database = this.getFreshDatabaseUnderLock();
+    this.playlistProjection = undefined;
+    return database.connection!.transaction(read)();
   }
 
   private clearDerivedCaches(): void {
@@ -856,6 +864,7 @@ export class RekordboxLibraryService {
                 content."ISRC" AS isrc, content."ReleaseYear" AS releaseYear,
                 content."BitRate" AS bitRate, content."SampleRate" AS sampleRate,
                 content."FileSize" AS fileSize,
+                strftime('%Y-%m-%dT%H:%M:%fZ', content."created_at") AS addedAt,
                 CAST(content."updated_at" AS TEXT) AS revision, artist."Name" AS artist,
                 album."Name" AS album, album."ImagePath" AS artworkPath,
                 label."Name" AS label, genre."Name" AS genre, keyRow."ScaleName" AS keyName
@@ -885,6 +894,7 @@ export class RekordboxLibraryService {
     return {
       ...summary,
       revision: trackRevision(row.revision),
+      addedAt: nullableString(row.addedAt) ?? undefined,
       comment: nullableString(row.comment),
       isrc: nullableString(row.isrc),
       releaseYear: nullableNumber(row.releaseYear),
@@ -922,8 +932,8 @@ export class RekordboxLibraryService {
     return path;
   }
 
-  /** Resolve Rekordbox artwork or read the recording's embedded front cover. */
-  async getArtwork(id: string): Promise<ArtworkAsset> {
+  /** Resolve the database-owned cover source without reading image or audio bytes. */
+  getArtworkSource(id: string): { kind: "file" | "embedded"; path: string } {
     const db = this.getDatabase();
     let audioPath: string | null = null;
     let rawArtwork: string | null = null;
@@ -961,8 +971,15 @@ export class RekordboxLibraryService {
 
     if (!audioPath || !this.cachedFileExists(audioPath))
       throw new RangeError(`Artwork for track '${id}' is unavailable`);
+    return { kind: "embedded", path: resolve(audioPath) };
+  }
+
+  /** Resolve Rekordbox artwork or read the recording's embedded front cover. */
+  async getArtwork(id: string): Promise<ArtworkAsset> {
+    const resolved = this.getArtworkSource(id);
+    if (resolved.kind === "file") return { kind: "file", path: resolved.path };
     try {
-      const requested = resolve(audioPath);
+      const requested = resolved.path;
       const source = lstatSync(requested);
       if (source.isSymbolicLink() || !source.isFile() || realpathSync(requested) !== requested)
         throw new Error("Audio source is not a regular file");

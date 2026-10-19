@@ -60,8 +60,9 @@ describe("DJ Link CLI", () => {
 
     expect(exitCode).toBeUndefined();
     expect(output).toContain("music djlink load <track>");
-    expect(output).toContain("load, and play");
-    expect(output).toContain("--player <number>");
+    expect(output).toContain("Resolve and load");
+    expect(output).toContain("--player");
+    expect(output).toContain("OMNIS remote Play is unverified");
   });
 
   it("advertises the one-shot manifest-to-deck handoff", async () => {
@@ -78,7 +79,8 @@ describe("DJ Link CLI", () => {
 
     expect(exitCode).toBeUndefined();
     expect(output).toContain("djlink link [track]");
-    expect(output).toContain("complete read-only master.db library");
+    expect(output).toContain("master.db library");
+    expect(output).toContain("persist daily playback history");
     expect(output).toContain("validate → start/resume → discover");
     expect(output).toContain("folders, playlists, artists, albums, and tracks");
     expect(output).toContain("network CTA");

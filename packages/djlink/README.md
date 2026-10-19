@@ -26,11 +26,14 @@ djbooth link --format json
 djbooth link "Artist - Track" --player 3 --format json
 ```
 
-Without a selector, `link` validates direct read-only master.db ingestion, starts or resumes,
+Without a selector, `link` validates master.db ingestion, starts or resumes,
 requires at least one discovered deck, and exposes the complete folders/playlists/artists/albums/
-tracks hierarchy. With a selector it also resolves, loads, and plays the track. Use `run` for a completed
-ad-hoc manifest before its recordings are imported. Both confirm playback from CDJ status. Stage commands remain
-for partial workflows and diagnosis:
+tracks hierarchy. Metadata ingestion is read-only; daily playback history is written to the
+`djbooth_play_history` extension table in the same database, which must be writable. With a selector,
+it resolves and loads the track, then attempts playback. A successful load is not proof of playback:
+the result reports the observed `playing` state and any `transportError`. Use `run` for a completed
+ad-hoc manifest before its recordings are imported. Stage commands remain for partial workflows
+and diagnosis:
 
 ```sh
 djlink run ./set/manifest.json 4 --player 3 --format json
@@ -60,6 +63,28 @@ separated from deck UI activation failures.
 
 `DJBOOTH_DJLINK_STATE_DIR` changes the daemon state directory. `DJBOOTH_DJLINK_BINARY` selects an
 explicit native helper. `--bind-ip` and `--broadcast-ip` are diagnostic overrides.
+
+## OMNIS-DUO and playback history
+
+OMNIS-DUO is one network appliance with two decks, not two CDJs. Its Wi-Fi source can browse the
+host library and play local recordings with analysis. Decks report status as players 11 and 12;
+`link` and `load` accept either 1/2 or 11/12. The runtime sends physical deck numbers 1/2 on the
+wire and confirms the load against status 11/12. Human aliases 1/2 apply only when no discovered
+standalone player owns that number. The diagnostic `monitor` command uses status IDs 11/12.
+Valid status traffic keeps the appliance alive when Wi-Fi discovery broadcasts are missed.
+
+Remote Play is not verified on OMNIS-DUO. Use the deck's physical Play button after loading.
+The monitor displays live track, transport, BPM, pitch, sync and master state. Its waveforms come
+from library analysis, and playback position is estimated from telemetry. EQ, faders, pads, FX
+and meters remain reference artwork, not wireless controls. The hardware view fits both window
+dimensions; click its screen to enlarge the display, then click again or press Escape to return.
+
+When serving `master.db`, history records the first observed play of each track per local calendar
+day, in play order. Loads, pauses, and tracks from another source are excluded. The daemon restores
+saved days at startup and serves them through the RemoteDB History menu; no source restart is
+needed for new entries. This is a daily played-track list, not an event log or an increment to
+Rekordbox play counts. It cannot recover plays from before recording was enabled. Manifest-only
+sources and the embedded iPhone runtime do not yet run the durable history recorder.
 
 ## Spotify boundary
 

@@ -2,9 +2,40 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MasterDatabase } from "@gakonst/rekordbox";
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import { createManifest } from "../src/manifest.js";
-import { inspectImportDetails, RekordboxPipelineStore } from "../src/pipeline-state.js";
+import {
+  inspectImportDetails,
+  RekordboxPipelineStore,
+  resolveRekordboxPipelineLocation,
+} from "../src/pipeline-state.js";
+
+vi.mock("@gakonst/rekordbox", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@gakonst/rekordbox")>()),
+  getConfig: () => ({
+    dbPath: join(tmpdir(), "configured", "master.db"),
+    dbDir: join(tmpdir(), "configured", "assets"),
+  }),
+}));
+
+test("an explicit database keeps analysis beside that database, not the configured library", () => {
+  const portable = join(tmpdir(), "portable");
+  const explicit = join(tmpdir(), "explicit");
+  expect(resolveRekordboxPipelineLocation({ dbPath: join(portable, "master.db") })).toEqual({
+    dbPath: join(portable, "master.db"),
+    dbDirectory: portable,
+  });
+  expect(
+    resolveRekordboxPipelineLocation({
+      dbPath: join(portable, "master.db"),
+      dbDirectory: explicit,
+    }).dbDirectory,
+  ).toBe(explicit);
+  expect(resolveRekordboxPipelineLocation({})).toEqual({
+    dbPath: join(tmpdir(), "configured", "master.db"),
+    dbDirectory: join(tmpdir(), "configured", "assets"),
+  });
+});
 
 test("reports persisted identities, extracts and errors without exposing filesystem paths or signed URLs", async () => {
   const directory = await mkdtemp(join(tmpdir(), "import-report-"));

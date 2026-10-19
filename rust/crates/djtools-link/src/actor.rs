@@ -32,6 +32,10 @@ pub(crate) enum ServerMsg {
         device: LinkDevice,
         reply: oneshot::Sender<bool>,
     },
+    DeviceActivity {
+        ip: Ipv4Addr,
+        seen_at: Instant,
+    },
     DeviceCount {
         reply: oneshot::Sender<u8>,
     },
@@ -332,6 +336,13 @@ impl ServerActor {
                     self.emit_telemetry(DjLinkTelemetryKind::Device, player);
                 }
                 let _ = reply.send(changed);
+            }
+            ServerMsg::DeviceActivity { ip, seen_at } => {
+                // Both OMNIS decks share an IP but advertise only one discovery identity.
+                // Valid status traffic proves the appliance is alive despite broadcast loss.
+                if let Some(device) = self.devices.get_mut(&ip) {
+                    device.last_seen = device.last_seen.max(seen_at);
+                }
             }
             ServerMsg::DeviceCount { reply } => {
                 let _ = reply.send(self.device_count());

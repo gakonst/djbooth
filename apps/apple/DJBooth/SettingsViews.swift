@@ -10,13 +10,35 @@ struct ConnectionSettings: View {
     @State private var runtime = DesktopRuntime()
     @State private var connecting = false
     @State private var showUSBLibrary = false
+    @State private var showMacPairing = false
+    @State private var forgetMac = false
     @State private var connectionError: String?
     var body: some View {
         NavigationStack {
             Form {
                 Section {
                     Label("Music lives on this device first", systemImage: "checkmark.shield")
-                    Text("Your library, collections, and downloaded audio stay available offline. Cloud sync carries changes between your devices.")
+                    Text("Downloaded music stays available offline. Pair with your Mac to browse its library, or use optional cloud sync.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Section("Paired Mac library") {
+                    if model.pairedMac.snapshot != nil {
+                        LabeledContent(model.pairedMac.name, value: model.pairedMac.connected ? "Connected" : "Offline · cached library")
+                            .accessibilityIdentifier("pair.status")
+                        Text("\(model.pairedMac.tracks.count) tracks · \(model.pairedMac.offlineIDs.count) on this device")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Button("Browse Mac library") { model.openPlaylistFolder(model.pairedMac.rootPath); dismiss() }
+                            .accessibilityIdentifier("pair.browse")
+                        Button("Refresh Mac library") { Task { await model.refreshPairedMac() } }
+                            .disabled(model.pairedMac.refreshing).accessibilityIdentifier("pair.refresh")
+                        Button("Forget Mac", role: .destructive) { forgetMac = true }
+                            .accessibilityIdentifier("pair.forget")
+                    }
+                    Button(model.pairedMac.isPaired ? "Update Mac pairing" : "Pair with Mac") { showMacPairing = true }
+                        .disabled(model.demo || model.pairedMac.refreshing).accessibilityIdentifier("pair.open")
+                    if model.pairedMac.refreshing { ProgressView("Refreshing library…") }
+                    if let error = model.pairedMac.error { Text(error).font(.caption).foregroundStyle(.red) }
+                    Text("Mac playlists are read-only here. Keep a playlist offline to download its audio and DJ analysis. This does not turn on phone-to-deck sharing.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 #if os(iOS)
@@ -100,6 +122,11 @@ struct ConnectionSettings: View {
                 .onAppear { cloudURL = model.cloudURL.isEmpty ? "https://djbooth-library.gakonst.workers.dev" : model.cloudURL; workstationURL = model.workstationURL }
         }
         .sheet(isPresented: $showUSBLibrary) { USBLibraryView(model: model) }
+        .sheet(isPresented: $showMacPairing) { MacPairingView(model: model) }
+        .alert("Forget this Mac?", isPresented: $forgetMac) {
+            Button("Forget Mac", role: .destructive) { Task { await model.forgetPairedMac() } }
+            Button("Cancel", role: .cancel) {}
+        } message: { Text("Remove this device’s pairing and cached Mac catalogue. The Mac’s music stays unchanged. Rotate the pairing key on your Mac to revoke access for every paired device.") }
         #if os(macOS)
         .frame(minWidth: 560, minHeight: 530)
         #endif

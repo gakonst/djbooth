@@ -4,7 +4,32 @@ SwiftUI applications for macOS and iOS, sharing `DJBoothKit`. The interface foll
 workstation palette and dense library layout. Apple system glass is used for controls; track
 content stays opaque. Waveforms display real Rekordbox analysis, including frequency colours.
 Mobile shows plain playlist and track lists, with inline notes, color, and the player pinned at the bottom.
-On iPhone, the welcome screen starts **Continue with Nanocodex** for SMS sign-in and connection approval. The app saves the login in Keychain and isolates libraries, downloaded media, playback, and pending imports by account. **Ask DJ Booth** in the library opens the connected agent. Its read-only phone tool queries live tracks, playlists, favorites, notes, playback, queue, downloads, sync conflicts, and imports, including unsynced edits. The phone must remain in the foreground; backgrounding, signing out, or switching accounts detaches its tools. Existing logins must reconnect once to approve the phone tool catalog. Spotify and SoundCloud remain optional connections in the same approval flow. Signing out returns to the welcome screen; existing offline libraries remain separate. Use `djbooth cloud login` and `djbooth cloud publish` to publish your Mac library deliberately.
+The iPhone app opens directly into the local library. Local library and USB access require neither
+a cloud account nor the Nanocodex app. Cloud sign-in is optional in Settings; its SMS verification
+and connection approval still use Nanocodex Connect. The app saves that login in Keychain and
+isolates libraries, downloaded media, playback, and pending imports by account. Signing out returns
+to the local library, not a sign-in gate; account-specific offline libraries remain separate.
+
+**Ask DJ Booth** opens the connected agent when a cloud session is configured. Its read-only phone
+tool queries live tracks, playlists, favorites, notes, playback, queue, downloads, sync conflicts,
+and imports, including unsynced edits. The phone must remain in the foreground; backgrounding,
+signing out, or switching accounts detaches its tools. Existing logins must reconnect once to
+approve the phone tool catalog. Spotify and SoundCloud remain optional connections in the same
+approval flow. Use `djbooth cloud login` and `djbooth cloud publish` to publish your Mac library
+deliberately.
+
+**Settings → Pair with Mac** accepts the private descriptor from the Mac's opt-in paired-library
+service as a file, pasted JSON, or an encoded QR code. Confirm the Mac before connecting. The app pins its TLS certificate,
+stores credentials in Keychain, and keeps the read-only catalogue separate from cloud sync.
+**Keep playlist offline** downloads hash-verified audio and DJ analysis; optional covers load as
+tracks become visible and remain available offline. Missing source artwork stays a placeholder.
+**Forget Mac** removes the local pairing and catalogue; rotating the pairing key on the Mac revokes
+access for all paired devices. Pairing does not enable phone-to-deck sharing automatically.
+
+**Search** on library pages opens all Tracks. **Tracks → … → Recently Added** sorts by the Mac's
+library addition date, newest first, with unknown dates last. Search results and playback queues
+use the same order, including repeated entries in paired playlists.
+
 Crew folders share all their playlists with their members. **Members → Add people** presents a
 QR code, Copy link, and the native share sheet (including AirDrop and Messages). HTTPS invites
 show a preview without consuming the single-use invite; **Open in DJ Booth** opens the join
@@ -192,7 +217,16 @@ mixing previous sessions. Fixture servers listen only on loopback ports 8791/879
 
 ## iPhone DJ Link development
 
-CDJ connection starts automatically when a wired interface appears. The sidebar's **CDJs** status screen uses the shared Rust RemoteDB/NFS engine. It projects
+CDJ connection starts automatically when a wired interface appears. For OMNIS-DUO,
+join the same Wi-Fi network and enable **DJ Link → Share over Wi-Fi**. This opt-in
+lasts for the app session and needs no Nanocodex account. Turning it off stops Wi-Fi
+sharing; changing interfaces interrupts tracks served by the phone. Keep DJBooth
+open and allow Local Network access. Phone-to-OMNIS browsing and playback still
+require physical-device verification; simulator coverage verifies presentation only.
+One discovered OMNIS appliance supplies two monitored decks, labeled Deck 1 and
+Deck 2, without unrelated DJM-A9 mixer controls.
+
+The sidebar's **DJ Link** status screen uses the shared Rust RemoteDB/NFS engine. It projects
 locally downloaded audio and ordered playlists into an in-memory session. Content-addressed
 hard links preserve audio extensions and stable exported paths across reconnects. The C ABI
 uses the shared Rust ANLZ reader/writer only to relocate audio paths. Cloud publishing
@@ -222,7 +256,7 @@ after iOS assigns the wired IPv4 address. A measured direct CDJ USB attachment s
 21.288 seconds waiting for that address, then started serving in 89 ms. Faster peer
 probing does not remove this earlier wait. AlphaTheta documents about 20 seconds for
 the same wired setup in [rekordbox for iOS](https://rekordbox.com/en/support/faq/ios/#faq-12293).
-The existing **CDJs → Connect faster next time** guide walks through optional
+The existing **DJ Link → Connect faster next time** guide walks through optional
 manual Ethernet addressing in iPhone Settings. Copyable values appear only after
 a real deck responds on the selected link-local interface; Wi-Fi, a Mac USB
 connection, and routed networks never supply suggested manual addresses. The

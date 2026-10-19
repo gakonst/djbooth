@@ -15,4 +15,5 @@ export {
   type LibraryServerOptions,
   type RunningLibraryServer,
 } from "./server/server.js";
+export { rotateLibraryPairing, type PairingDescriptor } from "./server/pairing.js";
 export * from "./shared/types.js";

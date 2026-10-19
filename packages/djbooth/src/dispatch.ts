@@ -7,6 +7,7 @@ const directlyRoutableCommands = new Set([
   "enrich",
   "import",
   "link",
+  "pairing",
   "playlist",
   "produce",
   "resolve",
@@ -59,6 +60,9 @@ export async function runDirectDjBoothCommand(argv: string[]): Promise<void> {
       break;
     case "serve":
       cli.command((await import("./serve.js")).serveCli);
+      break;
+    case "pairing":
+      cli.command((await import("./serve.js")).pairingCli);
       break;
     case "status":
       cli.command((await import("./status.js")).statusCli);

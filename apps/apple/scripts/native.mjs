@@ -28,6 +28,7 @@ Options:
   --arguments-file <file> Read hardware command JSON from a file instead of exposing it in process arguments
   --simulator <uuid>       Use an existing simulator (never changes unrelated devices)
   --bootstrap-env <file>   Read initial cloud URL/token from a private JSON file; token is never bundled
+  --pairing-file <file>    Pair the Debug app with the Mac using its private JSON descriptor
   --launch-only            Relaunch an already installed physical-device app without rebuilding
   --offline-track <id>     Keep a cloud track on this device after it syncs (Debug builds)
   --offline-collection <id> Keep a cloud collection on this device as its tracks arrive (Debug builds)
@@ -42,6 +43,7 @@ Options:
   --only-testing <test>    Restrict native UI tests to one Xcode test identifier
 Environment:
   DJBOOTH_APPLE_TEAM       Override the Xcode signing team for Mac and device builds
+  DJBOOTH_APPLE_BUNDLE_ID  Override the app identifier for personal signing and device commands
   DJBOOTH_DERIVED_DATA     Override the native build directory
 `;
 if (command === "help" || args.includes("--help")) { console.log(help); process.exit(0); }
@@ -59,6 +61,7 @@ const run = (binary, parameters, options = {}) => {
 };
 const json = (parameters) => JSON.parse(run("xcrun", parameters, { stdio: ["ignore", "pipe", "inherit"] }));
 const derived = resolve(process.env.DJBOOTH_DERIVED_DATA ?? resolve(root, ".build/xcode"));
+const bundleID = process.env.DJBOOTH_APPLE_BUNDLE_ID ?? "xyz.gakonst.djbooth";
 const configuration = "Debug";
 const optimizationSettings = args.includes("--optimized") ? ["SWIFT_OPTIMIZATION_LEVEL=-O"] : [];
 const appArguments = args.includes("--demo") ? ["--demo"] : [];
@@ -71,11 +74,17 @@ if (offlineCollection && offlineTrack) throw new Error("Choose either --offline-
 if (offlineCollection) appArguments.push("--keep-offline-collection", offlineCollection);
 const launchEnvironment = () => {
   const path = value("--bootstrap-env");
-  if (!path) return {};
-  const parsed = JSON.parse(readFileSync(resolve(process.cwd(), path), "utf8"));
+  const parsed = path ? JSON.parse(readFileSync(resolve(process.cwd(), path), "utf8")) : {};
   const allowed = new Set(["DJBOOTH_CLOUD_URL", "DJBOOTH_SYNC_TOKEN"]);
   if (!parsed || Array.isArray(parsed) || typeof parsed !== "object" || Object.entries(parsed).some(([key, item]) => !allowed.has(key) || typeof item !== "string")) {
     throw new Error("Bootstrap JSON must contain string DJBOOTH_CLOUD_URL and DJBOOTH_SYNC_TOKEN values only.");
+  }
+  const pairingPath = value("--pairing-file");
+  if (pairingPath) {
+    const pairing = readFileSync(resolve(process.cwd(), pairingPath), "utf8");
+    if (Buffer.byteLength(pairing) > 16_384) throw new Error("Pairing descriptor exceeds 16 KiB");
+    JSON.parse(pairing);
+    parsed.DJBOOTH_PAIRING_JSON = pairing;
   }
   return parsed;
 };
@@ -93,7 +102,7 @@ const build = (platform, options = {}) => {
   // Requires a provisioning profile with Associated Domains. Otherwise HTTPS
   // invite pages still open the app through the registered djbooth:// scheme.
   if (args.includes("--universal-links")) parameters.push(`DJBOOTH_LINK_ENTITLEMENTS=DJBooth/${args.includes("--dj-link") ? "DJLinkUniversal" : "App"}.entitlements`);
-  parameters.push(...optimizationSettings, `DJBOOTH_OFFLINE_COLLECTION=${offlineCollection ?? ""}`, "build");
+  parameters.push(...optimizationSettings, `PRODUCT_BUNDLE_IDENTIFIER=${bundleID}`, `DJBOOTH_OFFLINE_COLLECTION=${offlineCollection ?? ""}`, "build");
   run("xcodebuild", parameters);
   const products = resolve(derived, "Build/Products", platform === "macos" ? configuration : `${configuration}-${physical ? "iphoneos" : "iphonesimulator"}`);
   if (platform === "ios" && existsSync(resolve(products, "DJBooth.app.dSYM"))) {
@@ -140,7 +149,7 @@ async function hardwareRequest(device, operation, input = {}) {
   const request = resolve(directory, "request.json");
   const response = resolve(directory, "response.json");
   const remote = "Library/Application Support/DJBooth/HardwareControl";
-  const domain = ["--device", device, "--domain-type", "appDataContainer", "--domain-identifier", "xyz.gakonst.djbooth", "--timeout", "10"];
+  const domain = ["--device", device, "--domain-type", "appDataContainer", "--domain-identifier", bundleID, "--timeout", "10"];
   writeFileSync(request, JSON.stringify({ id, operation, arguments: input, expires_ms: Date.now() + 60_000 }));
   // The app claims a command by deleting request.json. It can do that before
   // devicectl's post-copy metadata lookup, which reports error 7000 even
@@ -203,7 +212,7 @@ if (command === "test-kit") {
         run("open", ["-a", "Simulator", "--args", "-CurrentDeviceUDID", id]);
         run("xcrun", ["simctl", "install", id, app]);
         const environment = Object.fromEntries(Object.entries(launchEnvironment()).map(([key, item]) => [`SIMCTL_CHILD_${key}`, item]));
-        run("xcrun", ["simctl", "launch", "--terminate-running-process", id, "xyz.gakonst.djbooth", ...appArguments], { env: { ...process.env, ...environment } });
+        run("xcrun", ["simctl", "launch", "--terminate-running-process", id, bundleID, ...appArguments], { env: { ...process.env, ...environment } });
       }
       break;
     }
@@ -222,7 +231,7 @@ if (command === "test-kit") {
         source = "Library/Application Support/" + path.split(marker)[1];
       }
       run("xcrun", ["devicectl", "device", "copy", "from", "--device", device,
-        "--domain-type", "appDataContainer", "--domain-identifier", "xyz.gakonst.djbooth", "--timeout", "30",
+        "--domain-type", "appDataContainer", "--domain-identifier", bundleID, "--timeout", "30",
         "--source", source, "--destination", destination], { timeout: 45_000 });
       console.log(`Phone diagnostics: ${destination}`);
       break;
@@ -235,7 +244,7 @@ if (command === "test-kit") {
         const app = build("ios", { physical: true });
         run("xcrun", ["devicectl", "device", "install", "app", "--device", device, app]);
       }
-      run("xcrun", ["devicectl", "device", "process", "launch", "--device", device, "--terminate-existing", ...(args.includes("--console") ? ["--console"] : []), "xyz.gakonst.djbooth", ...appArguments], { env: { ...process.env, ...environment } });
+      run("xcrun", ["devicectl", "device", "process", "launch", "--device", device, "--terminate-existing", ...(args.includes("--console") ? ["--console"] : []), bundleID, ...appArguments], { env: { ...process.env, ...environment } });
       break;
     }
     case "test-ui": {

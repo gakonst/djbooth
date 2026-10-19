@@ -931,3 +931,272 @@
   overflow: hidden;
   filter: none;
 }
+
+.hardware-view:has(.omnis-monitor),
+.omnis-monitor {
+  min-width: 0;
+  background: #030405;
+}
+
+.omnis-monitor {
+  width: 100%;
+  height: 100dvh;
+  max-height: 100%;
+  padding: 0;
+}
+
+.omnis-booth {
+  height: 100%;
+  container-type: size;
+  display: grid;
+  place-items: center;
+}
+
+/* Manufacturer image cropped to alpha bounds: 3180 × 1974. Every overlay
+   is registered to that coordinate plane, not the viewport or photo padding. */
+.omnis-hardware {
+  --hardware-ratio: calc(3180 / 1974);
+  position: relative;
+  width: min(100cqw, calc(100cqh * var(--hardware-ratio)));
+  aspect-ratio: var(--hardware-ratio);
+  container-type: inline-size;
+}
+
+.omnis-hardware > img {
+  display: block;
+  width: 100%;
+}
+
+.omnis-display {
+  position: absolute;
+  left: 34.6%;
+  top: 6.05%;
+  width: 30.8%;
+  height: 29.1%;
+  background: #080e17;
+  color: #ecf4fa;
+  display: grid;
+  grid-template-rows: 8% 46% 46%;
+  overflow: hidden;
+  border: 1px solid #394655;
+}
+
+.omnis-display-zoom {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  cursor: zoom-in;
+}
+
+.omnis-display-zoom:focus-visible {
+  outline: 2px solid #4ed8ff;
+  outline-offset: -2px;
+}
+
+.omnis-booth.is-focused .omnis-display-zoom {
+  cursor: zoom-out;
+}
+
+.omnis-display-nav {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0 2%;
+  font-size: 0.45cqw;
+  background: #172334;
+  color: #aacbdf;
+}
+
+.omnis-deck {
+  min-width: 0;
+  min-height: 0;
+  padding: 1.2% 2%;
+  border-top: 1px solid #394655;
+  display: grid;
+  grid-template-rows: 26% 44% 30%;
+  overflow: hidden;
+}
+
+.omnis-deck header {
+  display: flex;
+  align-items: center;
+  gap: 2%;
+  min-width: 0;
+  font-size: 0.52cqw;
+}
+
+.omnis-deck-number {
+  color: #d9f4ff;
+  background: #245681;
+  border-radius: 2px;
+  padding: 1% 2%;
+  font-size: 0.8cqw;
+}
+
+.omnis-deck header b {
+  margin-left: auto;
+  color: #4ed8ff;
+}
+
+.omnis-track-name {
+  min-width: 0;
+  flex: 1;
+}
+
+.omnis-deck h2 {
+  margin: 0;
+  font-size: 0.68cqw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.omnis-deck p {
+  margin: 2% 0 0;
+  color: #aabccd;
+  font-size: 0.5cqw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.omnis-deck .live-waveform {
+  height: 100%;
+  margin: 0;
+  min-height: 0;
+}
+
+.omnis-deck .live-waveform em {
+  font-size: 0.5cqw;
+}
+
+.omnis-deck dl {
+  display: flex;
+  justify-content: space-between;
+  gap: 2%;
+  align-items: center;
+  margin: 0;
+}
+
+.omnis-deck dt {
+  color: #99afc2;
+  font-size: 0.45cqw;
+  text-transform: uppercase;
+}
+
+.omnis-deck dd {
+  margin: 2% 0 0;
+  font-size: 0.75cqw;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.omnis-meter-mask {
+  position: absolute;
+  left: 48.5%;
+  top: 45.6%;
+  width: 3%;
+  height: 14%;
+  background: #1d354d;
+  border-radius: 4px;
+  opacity: 0.98;
+}
+
+.omnis-deck-indicators span {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+.omnis-jog-ring {
+  left: 17.4%;
+  top: 51.3%;
+  width: 10%;
+  aspect-ratio: 1;
+  border: 0.22cqw solid transparent;
+}
+
+.deck-2 .omnis-jog-ring {
+  left: 82.6%;
+}
+.omnis-jog-ring.is-playing {
+  border-color: #41b6ee;
+  box-shadow: 0 0 1.2cqw #42a7e27a;
+}
+
+.omnis-play-indicator,
+.omnis-cue-indicator {
+  left: 5.2%;
+  width: 4.3%;
+  aspect-ratio: 1;
+  border: 0.16cqw solid transparent;
+}
+
+.omnis-play-indicator {
+  top: 92.2%;
+}
+.omnis-cue-indicator {
+  top: 83.2%;
+}
+.deck-2 .omnis-play-indicator,
+.deck-2 .omnis-cue-indicator {
+  left: 70.5%;
+}
+.omnis-play-indicator.lit {
+  border-color: #6ddfb7;
+  box-shadow: 0 0 0.6cqw #6ddfb766;
+}
+.omnis-cue-indicator.lit {
+  border-color: #efb75a;
+  box-shadow: 0 0 0.6cqw #efb75a66;
+}
+
+.omnis-booth.is-focused .omnis-hardware {
+  --hardware-ratio: 2;
+}
+
+.omnis-booth.is-focused .omnis-hardware > img,
+.omnis-booth.is-focused .omnis-deck-indicators,
+.omnis-booth.is-focused .omnis-meter-mask {
+  display: none;
+}
+
+.omnis-booth.is-focused .omnis-display {
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.omnis-booth.is-focused .omnis-display-nav,
+.omnis-booth.is-focused .omnis-deck dt,
+.omnis-booth.is-focused .omnis-deck p,
+.omnis-booth.is-focused .omnis-deck header,
+.omnis-booth.is-focused .live-waveform em {
+  font-size: 1.4cqw;
+}
+.omnis-booth.is-focused .omnis-deck h2,
+.omnis-booth.is-focused .omnis-deck dd,
+.omnis-booth.is-focused .omnis-deck-number {
+  font-size: 2.1cqw;
+}
+
+@media (max-width: 700px) {
+  .omnis-booth.is-focused .omnis-hardware {
+    --hardware-ratio: 0.85;
+  }
+  .omnis-booth.is-focused .omnis-display-nav,
+  .omnis-booth.is-focused .omnis-deck dt,
+  .omnis-booth.is-focused .omnis-deck p,
+  .omnis-booth.is-focused .omnis-deck header,
+  .omnis-booth.is-focused .live-waveform em {
+    font-size: 3cqw;
+  }
+  .omnis-booth.is-focused .omnis-deck h2,
+  .omnis-booth.is-focused .omnis-deck dd,
+  .omnis-booth.is-focused .omnis-deck-number {
+    font-size: 4cqw;
+  }
+}

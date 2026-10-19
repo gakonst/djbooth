@@ -10,6 +10,7 @@ const sdkRequire = createRequire(import.meta.resolve("nanocodex/connect"));
 const { build } = createRequire(require.resolve("wrangler/package.json"))("esbuild");
 const origin = "http://127.0.0.1:8791";
 const issuerOrigin = "http://127.0.0.1:8792";
+const conversationId = "da9bd48b-05f7-4ea0-93da-61e06cfb7e81";
 const grant = (who) => `0x${(who === "Alice" ? "1" : "2").repeat(64)}`;
 const token = (who) => (who === "Alice" ? "a" : "b").repeat(43);
 const account = (who) => `nc_${createHash("sha256").update(who).digest("hex")}`;
@@ -60,10 +61,12 @@ const wire = (who) => ({
       "nanocodex.agent",
       "agent.output.final",
       "agent.output.actions",
+      "agent.history.read",
       "spotify",
       "soundcloud",
     ],
     mcp_connections: [],
+    conversation_id: conversationId,
     app_tool_catalog_digest: phoneDigest,
   },
 });
