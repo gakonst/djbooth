@@ -16,3 +16,5 @@ export * from "./sonos.js";
 export * from "./runtime.js";
 export * from "./status.js";
 export * from "./stop.js";
+
+export * from "./recommend.js";

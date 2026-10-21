@@ -21,6 +21,7 @@ import { replayCli } from "./replay.js";
 import { statusCli } from "./status.js";
 import { stopCli } from "./stop.js";
 import { loadDjBoothEnvironment } from "./environment.js";
+import { recommendCli } from "./recommend.js";
 import { produceCli } from "./produce.js";
 import { createDjBoothRoot, DJBOOTH_VERSION } from "./root.js";
 import { cloudCli } from "./cloud.js";
@@ -29,6 +30,7 @@ export { DJBOOTH_VERSION } from "./root.js";
 
 export const DJBOOTH_MCP_TOOL_FILTER = {
   include: [
+    "recommend",
     "resolve",
     "enrich",
     "download",
@@ -93,6 +95,7 @@ export function createDjBoothCli(): ReturnType<typeof Cli.create> {
   cli.command(cloudCli);
   cli.command(playlistCli);
   cli.command(produceCli);
+  cli.command(recommendCli);
   cli.command(stemsCli);
   cli.command(linkCli);
   cli.command(replayCli);

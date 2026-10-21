@@ -10,6 +10,7 @@ const directlyRoutableCommands = new Set([
   "pairing",
   "playlist",
   "produce",
+  "recommend",
   "resolve",
   "serve",
   "slsk",
@@ -31,6 +32,9 @@ export function canDispatchDirectly(argv: readonly string[]): boolean {
 export async function runDirectDjBoothCommand(argv: string[]): Promise<void> {
   const cli = createDjBoothRoot();
   switch (argv[0]) {
+    case "recommend":
+      cli.command((await import("./recommend.js")).recommendCli);
+      break;
     case "cloud":
       cli.command((await import("./cloud.js")).cloudCli);
       break;
