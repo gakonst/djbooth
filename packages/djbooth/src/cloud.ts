@@ -284,12 +284,11 @@ export async function publishCloudLibrary(
       emit("complete", tracks.length, tracks.length);
       return result;
     }
-    if (!options.endpoint || !options.token)
-      throw new Error(
-        "Run cloud login --endpoint <url>, then cloud publish --endpoint <url>; or provide --token-file",
-      );
+    if (!options.endpoint) throw new Error("Provide --endpoint or DJBOOTH_CLOUD_URL");
     const endpoint = cloudEndpoint(options.endpoint);
-    const headers = { Authorization: `Bearer ${options.token}` };
+    const headers: Record<string, string> = options.token
+      ? { Authorization: `Bearer ${options.token}` }
+      : {};
     const remote = new Map<string, Change>();
     async function call(path: string, init: RequestInit = {}, timeout = 60_000): Promise<Response> {
       // JSON sync writes carry stable operation IDs. Audio streams must instead
@@ -429,21 +428,29 @@ export async function publishCloudLibrary(
           const head = await call(`/v1/media/${digest}`, { method: "HEAD" });
           if (head.status === 404) {
             async function upload(hash: string, start: number, size: number): Promise<void> {
-              const stream = createReadStream(path, { start, end: start + size - 1 });
-              try {
-                const init = {
-                  method: "PUT",
-                  headers: {
-                    "Content-Type": "application/octet-stream",
-                    "Content-Length": String(size),
-                  },
-                  body: Readable.toWeb(stream) as ReadableStream<Uint8Array>,
-                  duplex: "half",
-                };
-                const uploaded = await checked(await call(`/v1/media/${hash}`, init, 600_000));
-                await uploaded.body?.cancel();
-              } finally {
-                stream.destroy();
+              for (let attempt = 0; ; attempt++) {
+                // A consumed streaming body cannot be replayed; reopen the same
+                // content-addressed range for each bounded retry.
+                const stream = createReadStream(path, { start, end: start + size - 1 });
+                try {
+                  const init = {
+                    method: "PUT",
+                    headers: {
+                      "Content-Type": "application/octet-stream",
+                      "Content-Length": String(size),
+                    },
+                    body: Readable.toWeb(stream) as ReadableStream<Uint8Array>,
+                    duplex: "half",
+                  };
+                  const uploaded = await checked(await call(`/v1/media/${hash}`, init, 600_000));
+                  await uploaded.body?.cancel();
+                  return;
+                } catch (error) {
+                  if (attempt >= 2) throw error;
+                } finally {
+                  stream.destroy();
+                }
+                await delay(250 * 2 ** attempt);
               }
             }
             const chunkSize = 16 * 1024 * 1024;

@@ -50,6 +50,27 @@ export function assertSameOrigin(request: Request): void {
  * Neither an account ID from the client nor a locally decoded grant is identity proof. */
 export async function authenticate(request: Request, env: Env): Promise<Account> {
   assertSameOrigin(request);
+  if (env.SHARED_LIBRARY_ACCOUNT) {
+    if (!/^nc_[a-f0-9]{64}$/.test(env.SHARED_LIBRARY_ACCOUNT))
+      throw new AuthError(503, "Shared library account is misconfigured.");
+    const path = new URL(request.url).pathname;
+    const login = ["/v1/auth/connect", "/v1/auth/exchange"].includes(path);
+    if (!["GET", "HEAD"].includes(request.method) && !login) {
+      const token = credential(request);
+      if (
+        !env.SHARED_LIBRARY_WRITE_TOKEN_HASH ||
+        !token ||
+        (await digest(token)) !== env.SHARED_LIBRARY_WRITE_TOKEN_HASH
+      )
+        throw new AuthError(401, "Library changes require the private publishing token.");
+    }
+    return {
+      id: env.SHARED_LIBRARY_ACCOUNT,
+      grantId: "shared-library",
+      expiresAt: 4102444800,
+      capabilities: [],
+    };
+  }
   const match = CREDENTIAL.exec(credential(request) ?? "");
   if (!match) throw new AuthError(401, "Continue with Nanocodex to access your library.");
   const music = new URL(request.url).pathname.startsWith("/v1/music/");
@@ -135,7 +156,12 @@ export async function authRoute(
   assertSameOrigin(request);
   const path = new URL(request.url).pathname;
   if (path === "/v1/auth/config" && request.method === "GET")
-    return json({ appId: CONNECT_APP_ID, api: CONNECT_API, dialog: CONNECT_DIALOG });
+    return json({
+      appId: CONNECT_APP_ID,
+      api: CONNECT_API,
+      dialog: CONNECT_DIALOG,
+      mode: env.SHARED_LIBRARY_ACCOUNT ? "shared" : "connect",
+    });
   if (path === "/v1/auth/logout" && request.method === "POST")
     return json({ signedOut: true }, 200, { "set-cookie": cookie(request, "", 0) });
   if (path === "/v1/auth/session" && request.method === "GET")
@@ -163,7 +189,7 @@ export async function authRoute(
     return json({ token: row.credential, account: await authenticate(verified, env) });
   }
   if (path !== "/v1/auth/connect") throw new AuthError(404, "Not found.");
-  const token = `nc1.${body.grantId}.${body.token}`;
+  const token = env.SHARED_LIBRARY_ACCOUNT ? "shared-library" : `nc1.${body.grantId}.${body.token}`;
   const verified = new Request(request.url, { headers: request.headers });
   verified.headers.set("authorization", `Bearer ${token}`);
   const account = await authenticate(verified, env);

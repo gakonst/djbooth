@@ -49,14 +49,14 @@ type Change = {
   payload: string | null;
   deleted: boolean;
 };
-function cloud(initial: Change[] = []) {
+function cloud(initial: Change[] = [], authorization: string | null = "Bearer test-token") {
   const changes = [...initial];
   const media = new Map<string, Uint8Array>();
   const requests: { path: string; method: string }[] = [];
   const request = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
     const url = new URL(String(input));
     const method = init?.method ?? "GET";
-    expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer test-token");
+    expect(new Headers(init?.headers).get("Authorization")).toBe(authorization);
     expect(init?.redirect).toBe("error");
     requests.push({ path: url.pathname, method });
     if (url.pathname === "/v1/sync/changes" && method === "GET")
@@ -297,6 +297,43 @@ describe("cloud publishing", () => {
     expect(result).toMatchObject({ published: 2, failures: [], conflicts: [] });
     expect(server.changes).toHaveLength(2);
     expect(interrupted).toBe(true);
+  });
+
+  test("reopens streaming audio after a consumed upload fails", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "djbooth-cloud-retry-"));
+    try {
+      const path = join(directory, "recording.m4a");
+      const bytes = Buffer.from("audio to replay in full");
+      await writeFile(path, bytes);
+      const server = cloud();
+      const bodies: BodyInit[] = [];
+      const request = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        if (init?.method === "PUT") {
+          bodies.push(init.body!);
+          if (bodies.length === 1) {
+            expect(Buffer.from(await new Response(init.body).arrayBuffer())).toEqual(bytes);
+            throw new TypeError("fetch failed");
+          }
+        }
+        return server.request(input, init);
+      }) as unknown as typeof fetch;
+      const result = await publishCloudLibrary(
+        library(path),
+        {
+          endpoint: "https://sync.example.com",
+          token: "test-token",
+        },
+        request,
+      );
+      expect(result).toMatchObject({ uploaded: 1, failures: [], conflicts: [] });
+      expect(bodies).toHaveLength(2);
+      expect(bodies[1]).not.toBe(bodies[0]);
+      expect(
+        Buffer.from(server.media.get(createHash("sha256").update(bytes).digest("hex"))!),
+      ).toEqual(bytes);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 
   test.each([16 * 1024 * 1024, 16 * 1024 * 1024 + 1])(
@@ -643,4 +680,15 @@ test("separate playlist databases cannot collide in cloud IDs and retries reuse 
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("publishes shared library metadata without a bearer token", async () => {
+  const remote = cloud([], null);
+  const result = await publishCloudLibrary(
+    library(),
+    { endpoint: "https://library.test", metadataOnly: true },
+    remote.request as typeof fetch,
+  );
+  expect(result.published).toBeGreaterThan(0);
+  expect(result.failures).toEqual([]);
 });

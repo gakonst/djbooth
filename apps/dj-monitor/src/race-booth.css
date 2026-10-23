@@ -1,0 +1,94 @@
+.race-hud {
+  position: absolute;
+  z-index: 3;
+  top: 54px;
+  left: 18px;
+  display: flex;
+  gap: 18px;
+  align-items: center;
+  padding: 10px 14px;
+  color: #65fff0;
+  background: #09031aeb;
+  border: 2px solid #65fff0;
+  border-radius: 0;
+  box-shadow: 4px 4px 0 #ec2e91;
+  pointer-events: none;
+  font:
+    bold 12px "Courier New",
+    monospace;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  text-shadow: 2px 2px #270735;
+}
+.race-hud span {
+  display: grid;
+  gap: 4px;
+}
+.race-hud small {
+  color: #e6a2ff;
+  font-size: 9px;
+  text-transform: uppercase;
+}
+.race-hud b {
+  font-weight: 900;
+  font-size: 14px;
+  white-space: nowrap;
+}
+.race-hud .race-title {
+  color: #fff16a;
+}
+.race-hud[data-boost="true"] {
+  border-color: #fff16a;
+  box-shadow: 4px 4px 0 #ff533d;
+}
+.is-immersive:has(.race-booth)::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+  background: repeating-linear-gradient(0deg, #0002 0 1px, transparent 1px 4px);
+}
+.is-immersive:has(.race-booth) .visual-director-status,
+.is-immersive:has(.race-booth) .visual-show-controls,
+.is-immersive:has(.race-booth) .visual-preview {
+  border-radius: 0;
+  border-color: #7541a5;
+  background-color: #09031aeb;
+}
+.is-immersive:has(.race-booth) .visual-director-status,
+.is-immersive:has(.race-booth) .visual-show-controls summary {
+  font-family: "Courier New", monospace;
+  color: #65fff0;
+}
+.is-immersive:has(.race-booth) .visual-scene-nav a {
+  border-radius: 0;
+}
+.is-immersive:has(.race-booth) .visual-scene-nav a[aria-current="page"] {
+  background: #3e104f;
+  border-color: #f754bd;
+}
+@media (max-width: 650px) {
+  .race-hud {
+    top: 90px;
+    left: 10px;
+    right: 10px;
+    gap: 10px;
+    justify-content: space-between;
+    padding: 7px;
+    font-size: 10px;
+  }
+  .race-hud .race-title {
+    display: none;
+  }
+  .race-hud b {
+    font-size: 11px;
+  }
+}
+@media (max-height: 560px) {
+  .race-hud {
+    top: 44px;
+    padding: 5px 10px;
+  }
+}

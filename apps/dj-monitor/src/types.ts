@@ -41,6 +41,7 @@ export type DeckState = {
 export type MixerState = {
   device: string;
   connected: boolean;
+  audioMeterConnected?: boolean;
   bpm: number | null;
   controls: Record<string, ControlState>;
   meters: Record<string, MeterState>;

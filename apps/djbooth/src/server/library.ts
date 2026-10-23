@@ -1,3 +1,4 @@
+import { defaultVisualShow, visualShowSchema, type VisualShow } from "./visual-show.js";
 import { randomUUID } from "node:crypto";
 import { lstatSync, realpathSync, statSync } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
@@ -1070,6 +1071,45 @@ export class RekordboxLibraryService {
     if (this.waveformCache.size > 128)
       this.waveformCache.delete(this.waveformCache.keys().next().value!);
     return result;
+  }
+
+  getVisualShow(): VisualShow {
+    const connection = this.getDatabase().connection!;
+    const exists = connection
+      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'djbooth_visual_show'")
+      .get();
+    if (!exists) return defaultVisualShow();
+    const row = connection
+      .prepare("SELECT show_json FROM djbooth_visual_show WHERE id = 1")
+      .get() as { show_json: string } | undefined;
+    return row ? visualShowSchema.parse(JSON.parse(row.show_json)) : defaultVisualShow();
+  }
+
+  async saveVisualShow(input: VisualShow): Promise<VisualShow> {
+    const show = visualShowSchema.parse(input);
+    if (!this.writeEnabled) throw new Error("Library write mode is disabled");
+    const dbPath = realpathSync(this.getDatabase().path);
+    return this.serializeMutation(dbPath, async () => {
+      const releaseLock = await this.acquireDatabaseLock(dbPath);
+      try {
+        const writer = this.getFreshDatabaseUnderLock();
+        const connection = writer.connection!;
+        connection.transaction(() => {
+          connection.exec(
+            "CREATE TABLE IF NOT EXISTS djbooth_visual_show (id INTEGER PRIMARY KEY CHECK (id = 1), show_json TEXT NOT NULL)",
+          );
+          connection
+            .prepare(
+              "INSERT INTO djbooth_visual_show (id, show_json) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET show_json = excluded.show_json",
+            )
+            .run(JSON.stringify(show));
+        })();
+        this.databaseFilesVersion = this.captureDatabaseFilesVersion(writer);
+        return show;
+      } finally {
+        await releaseLock();
+      }
+    });
   }
 
   /** Apply one serialized local mutation using SQLite's transaction boundary. */

@@ -6,6 +6,9 @@
   "assets": { "directory": "public", "binding": "ASSETS", "run_worker_first": true },
   "compatibility_date": "2026-08-01",
   "workers_dev": true,
+  "vars": {
+    "SHARED_LIBRARY_ACCOUNT": "nc_eaa692eb302d2bb39a228a3930a829e81aaf266da9e3cfb773ca5db95e98f4d5",
+  },
   "compatibility_flags": ["nodejs_compat"],
   "services": [{ "binding": "CONNECT_API_SERVICE", "service": "nanocodex-connect-api" }],
   "browser": { "binding": "BROWSER" },

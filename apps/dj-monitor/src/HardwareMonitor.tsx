@@ -8,10 +8,13 @@ import type {
   DeckState,
   MeterState,
 } from "./types.js";
+import { BoothVisuals } from "./BoothVisuals.js";
 import { CdjWaveform } from "./CdjWaveform.js";
 import { useA9Midi } from "./useA9Midi.js";
 import { useHardwareMonitor } from "./useHardwareMonitor.js";
 import { useTrackWaveform } from "./useTrackWaveform.js";
+import { waveformBands } from "./visual-signals.js";
+import type { WaveformBands } from "./waveform-signal.js";
 import cdj3000Image from "./assets/CDJ-3000_top.webp";
 import djmA9Image from "./assets/djm-a9_2.png";
 import omnisDuoImage from "./assets/OMNIS-DUO_top.webp";
@@ -91,8 +94,14 @@ export function HardwareMonitor({
   activity = [],
   mode = "live",
 }: HardwareMonitorProps & { mode?: "live" | "replay" }) {
-  const decks = monitorDecks(snapshot.decks);
-  const omnisDecks = snapshot.decks
+  const [previewSnapshot, setPreviewSnapshot] = useState<DashboardSnapshot | null>(null);
+  const displayed = previewSnapshot ?? snapshot;
+  const decks = monitorDecks(displayed.decks);
+  const immersive = new URLSearchParams(location.search).has("immersive");
+  const deckChannels = (new URLSearchParams(location.search).get("deckChannels") ?? "1,2,3")
+    .split(",")
+    .map(Number);
+  const omnisDecks = displayed.decks
     .filter((deck) => deck.model?.toUpperCase() === "OMNIS-DUO")
     // OMNIS reuses CDJ flag bits even while paused. Its explicit transport
     // state is authoritative; never animate a paused or disconnected deck.
@@ -115,7 +124,22 @@ export function HardwareMonitor({
   }
 
   return (
-    <main className="monitor-shell">
+    <main className={`monitor-shell ${immersive ? "is-immersive" : ""}`}>
+      {immersive ? (
+        <nav className="immersive-navigation" aria-label="Live booth controls">
+          <a href="/?assistant=0">Library</a>
+          <a href="/booth">Decks</a>
+          <span>PRO DJ LINK · {status}</span>
+          <span>A9 MIDI · {snapshot.mixer.connected ? "connected" : "disconnected"}</span>
+        </nav>
+      ) : null}
+      {immersive ? (
+        <BoothVisuals
+          snapshot={snapshot}
+          decks={monitorDecks(snapshot.decks)}
+          onPreview={setPreviewSnapshot}
+        />
+      ) : null}
       <header className="monitor-header">
         <div className="brand-lockup">
           <span>DJBOOTH</span>
@@ -135,15 +159,24 @@ export function HardwareMonitor({
       </header>
 
       <section className="booth-grid" aria-label="Three CDJ-3000 players and a DJM-A9 mixer">
-        <Cdj3000 deck={decks[0] ?? emptyDeck(1)} />
-        <Cdj3000 deck={decks[1] ?? emptyDeck(2)} />
-        <DjmA9
-          controls={snapshot.mixer.controls}
-          meters={snapshot.mixer.meters ?? {}}
-          connected={snapshot.mixer.connected}
-          bpm={snapshot.mixer.bpm}
+        <Cdj3000
+          deck={decks[0] ?? emptyDeck(1)}
+          bands={waveformBands(displayed, deckChannels[0] || 1)}
         />
-        <Cdj3000 deck={decks[2] ?? emptyDeck(3)} />
+        <Cdj3000
+          deck={decks[1] ?? emptyDeck(2)}
+          bands={waveformBands(displayed, deckChannels[1] || 2)}
+        />
+        <DjmA9
+          controls={displayed.mixer.controls}
+          meters={displayed.mixer.meters ?? {}}
+          connected={displayed.mixer.connected}
+          bpm={displayed.mixer.bpm}
+        />
+        <Cdj3000
+          deck={decks[2] ?? emptyDeck(3)}
+          bands={waveformBands(displayed, deckChannels[2] || 3)}
+        />
       </section>
 
       <Activity events={activity} />
@@ -268,7 +301,7 @@ function monitorDecks(decks: DeckState[]): DeckState[] {
     .map((player) => byPlayer.get(player) ?? emptyDeck(player));
 }
 
-function Cdj3000({ deck }: { deck: DeckState }) {
+function Cdj3000({ deck, bands }: { deck: DeckState; bands: WaveformBands }) {
   const waveform = useTrackWaveform(deck.trackId, deck.sourcePlayer, deck.sourceSlot);
   const trackLengthSec = deck.trackLengthSec ?? waveform?.durationSeconds ?? null;
   const beatGridMs = beatGridPositionMs(deck.beatNumber, waveform?.beatGrid);
@@ -307,7 +340,12 @@ function Cdj3000({ deck }: { deck: DeckState }) {
                 </span>
                 <b>{deck.tempoMaster ? "MASTER" : deck.synced ? "SYNC" : ""}</b>
               </div>
-              <CdjWaveform playheadMs={inferredPlayheadMs} bpm={deck.bpm} waveform={waveform} />
+              <CdjWaveform
+                playheadMs={inferredPlayheadMs}
+                bpm={deck.bpm}
+                waveform={waveform}
+                bands={bands}
+              />
               <div className="cdj-screen-bottom">
                 <span>
                   <small>PLAYED</small>
@@ -1409,7 +1447,7 @@ function PhotoFader({
     >
       <i
         className="a9-photo-sprite a9-vfader-restoration"
-        style={a9SpriteStyle(x, y - 2.5, x, y, 5.15, 2.35)}
+        style={a9SpriteStyle(x, y - 3.12, x, y, 7.2, 3.0)}
       />
       <i
         className="a9-photo-sprite a9-vfader-cap"

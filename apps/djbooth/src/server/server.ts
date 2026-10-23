@@ -1,3 +1,4 @@
+import { visualShowSchema, type VisualShow } from "./visual-show.js";
 import { randomBytes } from "node:crypto";
 import {
   createReadStream,
@@ -201,6 +202,8 @@ export type LibraryApi = {
   getArtwork(id: string): Promise<ArtworkAsset>;
   getBootstrap(csrfToken: string): LibraryBootstrap;
   getDatabasePath?(): string;
+  getVisualShow?(): VisualShow;
+  saveVisualShow?(show: VisualShow): Promise<VisualShow>;
   getPlaylists(): PlaylistItem[];
   getTrack(id: string): TrackDetail;
   getWaveform(id: string): TrackWaveform;
@@ -318,7 +321,7 @@ class HttpError extends Error {
 function setSecurityHeaders(response: ServerResponse): void {
   response.setHeader("cross-origin-opener-policy", "same-origin");
   response.setHeader("cross-origin-resource-policy", "same-origin");
-  response.setHeader("permissions-policy", "camera=(), geolocation=(), microphone=()");
+  response.setHeader("permissions-policy", "camera=(self), geolocation=(), microphone=()");
   response.setHeader("referrer-policy", "no-referrer");
   response.setHeader("x-content-type-options", "nosniff");
   response.setHeader("x-dns-prefetch-control", "off");
@@ -946,6 +949,20 @@ export async function startLibraryServer(
       if (url.pathname.startsWith("/v1/")) {
         assertMethod(request, ["GET", "HEAD"]);
         proxyHardwareStateHttp(request, response, hardwareStateHost, hardwareStatePort);
+        return;
+      }
+      if (url.pathname === "/api/visual-show") {
+        assertMethod(request, ["GET", "HEAD", "PUT"]);
+        if (!api.getVisualShow || !api.saveVisualShow)
+          throw new HttpError(503, "UNAVAILABLE", "Visual show storage is unavailable");
+        if (request.method === "PUT") {
+          assertMutationRequest(request, token);
+          const show = visualShowSchema.parse(await readJsonBody(request));
+          json(request, response, 200, await api.saveVisualShow(show));
+          rememberLocalFileVersions();
+        } else {
+          json(request, response, 200, api.getVisualShow());
+        }
         return;
       }
       if (url.pathname === "/api/bootstrap") {

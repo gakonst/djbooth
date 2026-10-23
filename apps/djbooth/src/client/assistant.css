@@ -2,7 +2,7 @@
   --assistant-width: clamp(330px, 27vw, 410px);
 }
 
-.workbench {
+.workbench:not(.is-agent-workbench) {
   grid-template-columns: var(--sidebar-width) minmax(0, 1fr) var(--assistant-width);
 }
 

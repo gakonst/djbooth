@@ -1,19 +1,26 @@
 import { useEffect, useRef } from "react";
 
 import type { TrackWaveform } from "./types.js";
+import { FLAT_WAVEFORM_BANDS, shapeWaveformSignal, type WaveformBands } from "./waveform-signal.js";
 
 type CdjWaveformProps = {
   playheadMs: number | null;
   bpm: number | null;
   waveform: TrackWaveform | null;
+  bands?: WaveformBands;
 };
 
 /** Scroll stable waveform tiles instead of resampling the peaks on every frame. */
-export function CdjWaveform({ playheadMs, bpm, waveform }: CdjWaveformProps) {
+export function CdjWaveform({
+  playheadMs,
+  bpm,
+  waveform,
+  bands = FLAT_WAVEFORM_BANDS,
+}: CdjWaveformProps) {
   const visibleBeats = 16;
   const windowSeconds = (visibleBeats * 60) / (bpm && bpm > 0 ? bpm : 120);
   const drawRef = useRef<() => void>(() => {});
-  const viewRef = useRef({ waveform, playheadMs, windowSeconds });
+  const viewRef = useRef({ waveform, playheadMs, windowSeconds, bands });
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
@@ -23,8 +30,8 @@ export function CdjWaveform({ playheadMs, bpm, waveform }: CdjWaveformProps) {
     let cachedWaveform: TrackWaveform | null = null;
     let cachedGeometry = "";
     const tileWidth = 512;
+    let bounds = canvas.getBoundingClientRect();
     const draw = () => {
-      const bounds = canvas.getBoundingClientRect();
       const width = Math.max(1, Math.round(bounds.width));
       const height = Math.max(1, Math.round(bounds.height));
       const ratio = window.devicePixelRatio || 1;
@@ -35,7 +42,7 @@ export function CdjWaveform({ playheadMs, bpm, waveform }: CdjWaveformProps) {
       context.setTransform(ratio, 0, 0, ratio, 0, 0);
       const view = viewRef.current;
       const pixelsPerSecond = width / view.windowSeconds;
-      const geometry = `${width}:${height}:${ratio}:${view.windowSeconds}`;
+      const geometry = `${width}:${height}:${ratio}:${view.windowSeconds}:${view.bands.join(":")}`;
       if (cachedWaveform !== view.waveform || cachedGeometry !== geometry) {
         tiles.clear();
         cachedWaveform = view.waveform;
@@ -62,6 +69,7 @@ export function CdjWaveform({ playheadMs, bpm, waveform }: CdjWaveformProps) {
             view.waveform,
             ((index + 0.5) * tileWidth) / pixelsPerSecond,
             tileWidth / pixelsPerSecond,
+            view.bands,
           );
           tiles.set(index, tile);
         }
@@ -74,15 +82,18 @@ export function CdjWaveform({ playheadMs, bpm, waveform }: CdjWaveformProps) {
     };
     drawRef.current = draw;
     draw();
-    const observer = new ResizeObserver(draw);
+    const observer = new ResizeObserver(() => {
+      bounds = canvas.getBoundingClientRect();
+      draw();
+    });
     observer.observe(canvas);
     return () => observer.disconnect();
   }, []);
 
   useEffect(() => {
-    viewRef.current = { waveform, playheadMs, windowSeconds };
+    viewRef.current = { waveform, playheadMs, windowSeconds, bands };
     drawRef.current();
-  }, [waveform, playheadMs, windowSeconds]);
+  }, [waveform, playheadMs, windowSeconds, bands]);
 
   return (
     <div className={`live-waveform ${waveform?.peaks.length ? "has-analysis" : "is-empty"}`}>
@@ -100,6 +111,7 @@ function drawWaveform(
   waveform: TrackWaveform | null,
   positionSeconds: number,
   windowSeconds: number,
+  bands: WaveformBands,
 ): void {
   context.clearRect(0, 0, width, height);
   context.fillStyle = "#030405";
@@ -131,19 +143,31 @@ function drawWaveform(
     const firstIndex = Math.floor(exactIndex);
     const secondIndex = Math.min(peaks.length - 1, firstIndex + 1);
     const mix = exactIndex - firstIndex;
-    const amplitude = clamp(
+    const originalAmplitude = clamp(
       lerp(Number(peaks[firstIndex] ?? 0), Number(peaks[secondIndex] ?? 0), mix),
       0,
       1,
     );
-    if (!amplitude) continue;
     const firstColor = colors?.[firstIndex] ?? [28, 117, 255];
     const secondColor = colors?.[secondIndex] ?? firstColor;
-    const [red, green, blue] = brightenWaveformColor([
-      lerp(firstColor[0], secondColor[0], mix),
-      lerp(firstColor[1], secondColor[1], mix),
-      lerp(firstColor[2], secondColor[2], mix),
-    ]);
+    const signal = shapeWaveformSignal(
+      {
+        amplitude: originalAmplitude,
+        color: colors
+          ? [
+              lerp(firstColor[0], secondColor[0], mix),
+              lerp(firstColor[1], secondColor[1], mix),
+              lerp(firstColor[2], secondColor[2], mix),
+            ]
+          : null,
+      },
+      bands,
+    );
+    const amplitude = signal.amplitude;
+    if (!amplitude) continue;
+    const [red, green, blue] = brightenWaveformColor(
+      (signal.color ?? firstColor) as [number, number, number],
+    );
     const waveformHeight = Math.max(1, amplitude * (height / 2 - 2));
     context.fillStyle = `rgb(${String(red)} ${String(green)} ${String(blue)})`;
     context.fillRect(x, Math.round(midline - waveformHeight), 1, Math.ceil(waveformHeight * 2));

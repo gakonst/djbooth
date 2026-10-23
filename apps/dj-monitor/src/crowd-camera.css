@@ -1,0 +1,54 @@
+.crowd-camera {
+  display: grid;
+  gap: 0.65rem;
+  padding: 0.9rem;
+  color: #f4edf8;
+  background: #171322;
+  border: 1px solid #544267;
+  border-radius: 0.75rem;
+  font:
+    0.8rem/1.5 system-ui,
+    sans-serif;
+}
+.crowd-camera__heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+.crowd-camera p {
+  margin: 0;
+  color: #cfbfdc;
+}
+.crowd-camera label {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+.crowd-camera button,
+.crowd-camera select {
+  font: inherit;
+  color: #fff;
+  background: #38264a;
+  border: 1px solid #9870b4;
+  border-radius: 0.4rem;
+  padding: 0.45rem 0.65rem;
+  max-width: 100%;
+}
+.crowd-camera button {
+  cursor: pointer;
+}
+.crowd-camera input {
+  accent-color: #f1a6ff;
+  flex: 1;
+  min-width: 5rem;
+}
+.crowd-camera :focus-visible {
+  outline: 2px solid #ffc784;
+  outline-offset: 3px;
+}
+.crowd-camera .crowd-camera__status {
+  color: #ffc784;
+}

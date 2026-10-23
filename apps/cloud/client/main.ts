@@ -32,7 +32,59 @@ async function main() {
     if (!response.ok) throw new Error(value.error?.message ?? "Request failed. Try again.");
     return value as T;
   }
-  const config = await api<{ appId: string; api: string; dialog: string }>("/v1/auth/config");
+  const config = await api<{ appId: string; api: string; dialog: string; mode?: string }>(
+    "/v1/auth/config",
+  );
+  if (config.mode === "shared") {
+    el("welcome-title").textContent = "Open DJ Booth";
+    el("welcome-detail").textContent =
+      "This shared library is available without signing in. Anyone with the URL can read it; changes require a private publishing token. Nanocodex agent and music connections are unavailable.";
+    el("welcome").querySelector("fieldset")!.hidden = true;
+    el("welcome").querySelector(".hint")!.textContent = "Open the library in the DJ Booth app.";
+    const button = el<HTMLButtonElement>("connect");
+    button.textContent = "Open shared library";
+    button.onclick = async () => {
+      try {
+        const params = new URLSearchParams(location.search);
+        const native = params.get("native") === "1";
+        const challenge = params.get("challenge"),
+          state = params.get("state");
+        const callback = new URL(params.get("return") ?? "djbooth://connect");
+        if (
+          params.has("return") &&
+          (callback.protocol !== "http:" ||
+            callback.hostname !== "127.0.0.1" ||
+            !callback.port ||
+            callback.pathname !== "/connect" ||
+            callback.username ||
+            callback.password ||
+            callback.search ||
+            callback.hash)
+        )
+          throw new Error("Invalid CLI login callback.");
+        if (
+          native &&
+          (!challenge ||
+            !/^[a-f0-9]{64}$/.test(challenge) ||
+            !state ||
+            !/^[A-Za-z0-9_-]{32,128}$/.test(state))
+        )
+          throw new Error("Invalid app login request.");
+        const result = await api<{ code?: string }>(
+          "/v1/auth/connect",
+          native ? { challenge } : {},
+        );
+        if (native && result.code) {
+          callback.searchParams.set("code", result.code);
+          callback.searchParams.set("state", state!);
+          location.href = callback.href;
+        } else status("Shared library ready. Open DJ Booth to browse and sync.");
+      } catch (error) {
+        fail(error);
+      }
+    };
+    return;
+  }
   // Use the SDK's public persistence adapter. The app never touches private SDK
   // fields or provider OAuth credentials. Session storage also isolates browser tabs.
   const key = `nanocodex:connect:${config.appId}:session`;
