@@ -1,3 +1,9 @@
+## Current shared-library deployment
+
+`wrangler.jsonc` sets `SHARED_LIBRARY_ACCOUNT` to the existing library owner, preserving D1 rows, R2 media paths, and iOS cache identity. All library requests use that account without consulting Nanocodex. Reads, including media and sync, are public. Mutations require a bearer token matching the SHA-256 digest in the Worker secret `SHARED_LIBRARY_WRITE_TOKEN_HASH`; an absent secret fails closed. Same-origin browser checks remain; they are not authentication. Connect-backed agent/provider operations have no agent capabilities in this mode and are unavailable.
+
+Existing iOS sessions can pull the library and play media. Mobile edits require the private publishing token; the anonymous native marker grants read access only. New native or CLI logins use the existing challenge/code exchange through the Worker landing page's **Open shared library** button; the returned `shared-library` marker is not a secret. Publish directly with `pnpm djbooth cloud publish --endpoint https://djbooth-library.gakonst.workers.dev --token-file ~/.config/djbooth/cloud/publish-token --playlist Halloween --progress always --format json`. Removing `SHARED_LIBRARY_ACCOUNT` restores the Connect access model described below.
+
 # Account-scoped library and music agent
 
 Login signs the exact app tool catalog shared with DJBoothKit. The phone owns

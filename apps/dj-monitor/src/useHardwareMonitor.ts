@@ -154,7 +154,7 @@ export function useHardwareMonitor(): {
             observedAtUs: parsed.observedAtUs,
             mixer: {
               ...current.mixer,
-              connected: true,
+              audioMeterConnected: true,
               meters: parsed.meters,
             },
           }));
@@ -167,6 +167,7 @@ export function useHardwareMonitor(): {
           observedAtUs: parsed.observedAtUs,
           mixer: {
             ...current.mixer,
+            connected: true,
             bpm: event.bpm ?? current.mixer.bpm,
             controls: event.control
               ? {

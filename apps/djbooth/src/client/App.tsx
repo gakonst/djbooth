@@ -2248,6 +2248,9 @@ export function App({ assistantEnabled = true }: AppProps) {
             <a className="view-link" href={assistantEnabled ? "/booth" : "/booth?assistant=0"}>
               <AudioLines size={14} /> Live booth
             </a>
+            <a className="view-link" href="/booth?immersive=1">
+              <AudioLines size={14} /> Visuals + decks
+            </a>
             <button
               className={`split-editor-button ${dualDeck ? "is-active" : ""}`}
               type="button"

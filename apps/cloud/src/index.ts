@@ -17,6 +17,9 @@ export { CrewRoom } from "./crew-room.js";
 import type { CrewRoom } from "./crew-room.js";
 
 export interface Env {
+  /** Explicit single-library deployment: public reads and operator-authenticated writes without Connect. */
+  SHARED_LIBRARY_ACCOUNT?: string;
+  SHARED_LIBRARY_WRITE_TOKEN_HASH?: string;
   /** Optional authenticated, streaming, idempotent SoundCloud upload broker. */
   SOUNDCLOUD_UPLOAD_SERVICE?: Fetcher;
   DOWNLOAD_WORKFLOW?: Workflow<DownloadParams>;

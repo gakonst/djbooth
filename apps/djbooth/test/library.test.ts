@@ -1,3 +1,6 @@
+import { startLibraryServer } from "../src/server/server.js";
+import { defaultVisualShow } from "../src/server/visual-show.js";
+import { defaultVisualShow as sharedDefaultVisualShow } from "../src/shared/visual-presets.js";
 import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -1118,5 +1121,58 @@ describe("RekordboxLibraryService", () => {
     expect(committed).toHaveLength(1);
     db.close();
     expect(new MasterPlaylistXml(fixture.xmlPath).get(String(committed[0]!.id))).toBeUndefined();
+  });
+});
+
+describe("durable visual shows", () => {
+  it("serves defaults, saves with authentication, and reloads from master.db", async () => {
+    const files = copiedFixture();
+    writeFileSync(join(files.root, "index.html"), "<main>test</main>");
+    const library = service(files);
+    expect(defaultVisualShow()).toEqual(sharedDefaultVisualShow());
+    const server = await startLibraryServer({
+      api: library,
+      assistantEnabled: false,
+      port: 0,
+      staticDirectory: files.root,
+    });
+    try {
+      const endpoint = new URL("api/visual-show", server.url);
+      expect(await (await fetch(endpoint)).json()).toEqual(defaultVisualShow());
+      const bootstrap = library.getBootstrap("test");
+      const actualBootstrap = (await (
+        await fetch(new URL("api/bootstrap", server.url))
+      ).json()) as typeof bootstrap;
+      const token = actualBootstrap.csrfToken;
+      const show = defaultVisualShow();
+      show.presets[0]!.name = "Saved midnight";
+      show.loop = true;
+      const put = (body: unknown, extra: Record<string, string> = {}) =>
+        fetch(endpoint, {
+          method: "PUT",
+          headers: { "content-type": "application/json", "x-djbooth-token": token, ...extra },
+          body: JSON.stringify(body),
+        });
+      expect((await put(show, { "x-djbooth-token": "bad" })).status).toBe(403);
+      expect((await put(show, { origin: "http://evil.example" })).status).toBe(403);
+      const saved = await put(show);
+      expect(saved.status).toBe(200);
+      expect(await saved.json()).toEqual(show);
+      expect(await (await fetch(endpoint)).json()).toEqual(show);
+      const invalid = structuredClone(show);
+      invalid.cues[0]!.presetId = "missing";
+      expect((await put(invalid)).status).toBe(400);
+      const duplicate = structuredClone(show);
+      duplicate.presets.push(duplicate.presets[0]!);
+      expect((await put(duplicate)).status).toBe(400);
+      const bounds = structuredClone(show);
+      bounds.presets[0]!.look.motion = 3;
+      expect((await put(bounds)).status).toBe(400);
+      library.close();
+      const reloaded = service(files);
+      expect(reloaded.getVisualShow()).toEqual(show);
+    } finally {
+      await server.close();
+    }
   });
 });

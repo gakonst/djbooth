@@ -1,0 +1,276 @@
+/* Classic CDJ / DJM: graphite chassis, amber LCDs, and illuminated transport.
+   Keep the performance layout and cue colors; this layer owns only the finish. */
+.workbench {
+  --bg: #101110;
+  --surface: #171918;
+  --surface-raised: #222522;
+  --surface-hover: #2a2d28;
+  --surface-active: #34362c;
+  --border: #363932;
+  --border-soft: #292c27;
+  --border-strong: #50534a;
+  --text: #eeeee4;
+  --text-soft: #c9cbbf;
+  --muted: #a0a596;
+  --faint: #858b7c;
+  --accent: #edb65b;
+  --accent-bright: #ffda8d;
+  --accent-soft: rgb(237 182 91 / 13%);
+  --success: #9fd57b;
+  --success-soft: rgb(159 213 123 / 12%);
+  --warning: #edb65b;
+  --warning-soft: rgb(237 182 91 / 12%);
+  --danger: #f48e7d;
+  background: var(--bg);
+  font-family: "Helvetica Neue", Arial, sans-serif;
+}
+
+.workbench ::selection {
+  background: #785b2c;
+  color: #fff1d3;
+}
+
+.workbench .library-sidebar,
+.workbench .prompt-dock {
+  background: linear-gradient(90deg, rgb(255 255 255 / 2%), transparent 45%), #171918;
+}
+
+.workbench .sidebar-brand,
+.workbench .topbar,
+.workbench .prompt-dock-header {
+  border-bottom: 1px solid #080a08;
+  background: linear-gradient(#30332f, #1e211e);
+  box-shadow:
+    inset 0 1px rgb(255 255 255 / 9%),
+    0 1px #3a3d35;
+}
+
+.workbench .brand-mark {
+  border: 1px solid #74786b;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle,
+    #171a16 35%,
+    #696d60 38%,
+    #292c26 58%,
+    #929587 61%,
+    #34372f 70%
+  );
+  color: #f5ce80;
+  box-shadow: 0 2px 4px #000;
+}
+
+.workbench .brand-copy strong {
+  font-size: 15px;
+  font-weight: 800;
+  font-style: italic;
+  letter-spacing: -0.05em;
+}
+
+.workbench .brand-copy span,
+.workbench .sidebar-section-label,
+.workbench .player-volume-label,
+.workbench .player-cues-label,
+.workbench .deck-mixer-label {
+  color: #abb0a0;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  letter-spacing: 0.12em;
+}
+
+.workbench .sidebar-search,
+.workbench .track-search {
+  border-color: #41463a;
+  border-radius: 3px;
+  background: #0c100c;
+  box-shadow: inset 0 2px 5px #000;
+}
+
+.workbench .sidebar-search:focus-within,
+.workbench .track-search:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.workbench .sidebar-item,
+.workbench .playlist-node-row,
+.workbench .collection-icon {
+  border-radius: 3px;
+}
+
+.workbench .sidebar-item.is-active,
+.workbench .playlist-node-row.is-active {
+  background: linear-gradient(90deg, #473b26, #24271f);
+  color: var(--accent-bright);
+  box-shadow: inset 3px 0 var(--accent);
+}
+
+.workbench .collection-toolbar,
+.workbench .search-toolbar {
+  background: #191c18;
+}
+
+.workbench .collection-title h1 {
+  font-weight: 700;
+  letter-spacing: -0.025em;
+}
+
+.workbench .collection-icon {
+  border-color: #5d513a;
+  background: #29271e;
+  color: var(--accent);
+}
+
+.workbench .primary-button {
+  border-color: #d2a052;
+  border-radius: 3px;
+  background: linear-gradient(#efcc86, #c89a4c);
+  color: #211c12;
+  box-shadow:
+    inset 0 1px #ffe6ae,
+    0 2px 3px #0008;
+}
+
+.workbench .primary-button:hover:not(:disabled) {
+  background: linear-gradient(#ffe1a2, #dfb364);
+}
+
+.workbench .secondary-button,
+.workbench .view-link,
+.workbench .player-control-button,
+.workbench .player-memory-cue-button,
+.workbench .deck-transition-buttons button,
+.workbench .deck-reset-button {
+  border: 1px solid #4c5145;
+  border-radius: 3px;
+  background: linear-gradient(#34392f, #20241d);
+  color: var(--text-soft);
+  box-shadow:
+    inset 0 1px rgb(255 255 255 / 8%),
+    0 2px 2px #0008;
+}
+
+.workbench .secondary-button:hover:not(:disabled),
+.workbench .player-control-button:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: #393c30;
+  color: var(--accent-bright);
+}
+
+.workbench .track-table th {
+  border-bottom-color: #555a4b;
+  background: #292e24;
+  color: #bec4af;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+}
+
+.workbench .track-table tbody tr {
+  background: #121610;
+}
+
+.workbench .track-table tbody tr:nth-child(even) {
+  background: #191d15;
+}
+
+.workbench .track-table tbody tr:hover {
+  background: #2a3022;
+}
+
+.workbench .track-table tbody tr.is-selected {
+  background: #393722;
+  box-shadow: inset 3px 0 var(--accent);
+}
+
+.workbench .track-table tbody tr.is-selected td {
+  border-bottom-color: #4c4930;
+}
+
+.workbench .player-dock {
+  border-bottom: 2px solid #050705;
+  background: repeating-linear-gradient(0deg, #ffffff02 0 1px, transparent 1px 3px), #242722;
+  box-shadow:
+    inset 0 1px #5a5d51,
+    0 3px 0 #3d4136,
+    0 6px 15px #0006;
+}
+
+.workbench .player-overview,
+.workbench .player-waveform-wrap {
+  border: 1px solid #4b5141;
+  border-radius: 3px;
+  background: #090e09;
+  box-shadow:
+    inset 0 2px 6px #000,
+    0 1px #ffffff0a;
+}
+
+.workbench .player-overview-waveform,
+.workbench .player-waveform {
+  background: #090e09;
+}
+
+.workbench .player-track-copy strong,
+.workbench .player-overview-stats,
+.workbench .player-time-row {
+  color: var(--accent-bright);
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 0 8px rgb(237 182 91 / 18%);
+}
+
+.workbench .player-cues,
+.workbench .player-volume,
+.workbench .deck-mixer {
+  border-color: #43483c;
+  border-radius: 3px;
+  background: linear-gradient(120deg, #2a2e25, #1b1f18);
+  box-shadow: inset 0 1px #ffffff0a;
+}
+
+.workbench .player-play-button {
+  border: 2px solid #95c975;
+  border-radius: 24px;
+  background: radial-gradient(ellipse at 45% 30%, #464e3d, #1d2519 75%);
+  color: #b9f492;
+  box-shadow:
+    inset 0 0 0 3px #11170e,
+    0 0 0 1px #10170c,
+    0 0 9px #9fd57b30;
+}
+
+.workbench .player-play-button:hover:not(:disabled) {
+  background: #3f5031;
+  box-shadow:
+    inset 0 0 0 3px #11170e,
+    0 0 12px #9fd57b55;
+}
+
+.workbench .player-hot-cue > button:first-child {
+  border-radius: 2px;
+  box-shadow:
+    inset 0 1px #ffffff25,
+    0 2px 0 #000;
+}
+
+.workbench .player-eq-knob {
+  border-color: #757b69;
+  background: radial-gradient(circle at 38% 30%, #555c4c, #161b13 72%);
+  box-shadow:
+    0 2px 4px #000,
+    inset 0 0 0 3px #242b1d;
+}
+
+.workbench input[type="range"] {
+  accent-color: #c0c4b0;
+}
+
+.workbench .prompt-dock-title strong {
+  color: var(--accent-bright);
+}
+
+.workbench .prompt-dock-header,
+.workbench .prompt-dock input,
+.workbench .prompt-dock textarea {
+  border-radius: 3px;
+}

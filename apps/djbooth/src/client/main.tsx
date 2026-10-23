@@ -8,6 +8,7 @@ import { assistantEnabledFromSearch, djBoothViewFromPath } from "../workbench-mo
 import "@gakonst/dj-monitor/styles.css";
 import "./styles.css";
 import "./assistant.css";
+import "./retro.css";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -38,6 +39,7 @@ createRoot(root).render(
           <a aria-current="page" href="/booth">
             Live booth
           </a>
+          <a href="/booth?immersive=1">Visuals + decks</a>
         </nav>
         <LiveHardwareMonitor />
       </div>

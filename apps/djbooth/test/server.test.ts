@@ -349,6 +349,9 @@ describe("library server", () => {
     expect(page.headers.get("content-security-policy")).toContain("ws://127.0.0.1:*");
     expect(page.headers.get("x-content-type-options")).toBe("nosniff");
     expect(page.headers.get("x-frame-options")).toBe("DENY");
+    expect(page.headers.get("permissions-policy")).toBe(
+      "camera=(self), geolocation=(), microphone=()",
+    );
 
     const headPage = await fetch(server.url, { method: "HEAD" });
     expect(headPage.status).toBe(200);

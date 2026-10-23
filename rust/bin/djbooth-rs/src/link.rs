@@ -1162,6 +1162,7 @@ async fn serve(args: ServeArgs) -> Result<()> {
     }
     let mut decoder = Decoder::default();
     let mut midi_connect_task: Option<tokio::task::JoinHandle<MidiConnectResult>> = None;
+    let mut last_midi_connect_error: Option<String> = None;
     let mut audio_connect_task: Option<tokio::task::JoinHandle<AudioConnectResult>> = None;
     let mut reconnect = tokio::time::interval(DEVICE_RECONNECT_INTERVAL);
     reconnect.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -1200,6 +1201,7 @@ async fn serve(args: ServeArgs) -> Result<()> {
                 midi_connect_task = None;
                 match result {
                     Ok(Ok((connection, receiver, name))) => {
+                        last_midi_connect_error = None;
                         tracing::info!(device = %name, "state_api_midi_reconnected");
                         device_name = name.clone();
                         midi_connection = Some(connection);
@@ -1207,7 +1209,17 @@ async fn serve(args: ServeArgs) -> Result<()> {
                         decoder = Decoder::default();
                         state_api.publisher().set_mixer_connection(Some(name), true).await?;
                     }
-                    Ok(Err(error)) => tracing::debug!(%error, "state_api_midi_reconnect_pending"),
+                    Ok(Err(error)) => {
+                        // Keep optional-device failures visible without logging the
+                        // same failure on every reconnect tick. Include the cause
+                        // chain: USB ownership errors otherwise look like a missing
+                        // input and cannot be diagnosed from the managed log.
+                        let detail = format!("{error:#}");
+                        if last_midi_connect_error.as_ref() != Some(&detail) {
+                            tracing::warn!(device = %args.midi_device, error = %detail, "state_api_midi_reconnect_pending");
+                            last_midi_connect_error = Some(detail);
+                        }
+                    }
                     Err(error) => tracing::warn!(%error, "state_api_midi_connect_task_failed"),
                 }
             }

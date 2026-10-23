@@ -916,7 +916,10 @@
 .booth-grid > .cdj3000 {
   aspect-ratio: 2196 / 2826 !important;
   overflow: hidden;
-  filter: none;
+  transform: scale(calc(1 + var(--deck-beat, 0) * 0.009));
+  transform-origin: center bottom;
+  filter: brightness(calc(1 + var(--deck-beat, 0) * 0.16))
+    drop-shadow(0 0 calc(var(--deck-beat, 0) * 16px) #6edaff88);
 }
 
 .cdj-coordinate-plane {
@@ -930,4 +933,209 @@
 .booth-grid > .djma9 {
   overflow: hidden;
   filter: none;
+}
+
+.monitor-shell.is-immersive {
+  position: fixed;
+  inset: 0;
+  width: 100vw !important;
+  height: 100vh;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background: #000;
+}
+.is-immersive > .monitor-header,
+.is-immersive > .activity-panel,
+.is-immersive > .activity-strip {
+  display: none;
+}
+.booth-visuals {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.booth-waveform-overlay {
+  position: absolute;
+  z-index: 2;
+  top: 37%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  opacity: 0.5;
+  pointer-events: none;
+}
+.immersive-navigation {
+  position: absolute;
+  z-index: 4;
+  top: 12px;
+  left: 16px;
+  right: 16px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px;
+  color: #a4b5bf;
+  font: 10px monospace;
+  letter-spacing: 1px;
+}
+.immersive-navigation a {
+  color: #d6efff;
+  padding: 8px 0;
+}
+.is-immersive > .booth-grid.booth-grid {
+  --booth-height: min(38vh, 28vw);
+  position: absolute;
+  z-index: 2;
+  left: 0;
+  right: 0;
+  top: auto;
+  bottom: env(safe-area-inset-bottom, 0px);
+  transform: none;
+  height: auto !important;
+  isolation: isolate;
+}
+.is-immersive:has(.race-booth) > .booth-grid.booth-grid {
+  --booth-height: min(24vh, 23vw);
+  top: auto;
+  bottom: env(safe-area-inset-bottom, 0px);
+  transform: none;
+}
+.is-immersive:has(.race-booth) .visual-preview {
+  left: 14px;
+  transform: none;
+  bottom: calc(min(24vh, 23vw) + 12px + env(safe-area-inset-bottom, 0px));
+}
+@media (max-width: 700px) {
+  .is-immersive:has(.race-booth) > .booth-grid.booth-grid {
+    bottom: env(safe-area-inset-bottom, 0px);
+  }
+  .is-immersive:has(.race-booth) .visual-preview {
+    bottom: calc(min(24vh, 23vw) + 12px + env(safe-area-inset-bottom, 0px));
+  }
+}
+.visual-preview {
+  position: absolute;
+  z-index: 3;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: min(92vw, 850px);
+  padding: 10px 14px;
+  color: #a4b3c7;
+  background: #080c17d9;
+  border: 1px solid #243042;
+  border-radius: 12px;
+  font:
+    10px ui-monospace,
+    monospace;
+}
+.is-immersive:has(.temple-run-booth) .visual-preview {
+  bottom: calc(min(38vh, 28vw) + 12px + env(safe-area-inset-bottom, 0px));
+}
+.visual-preview > span {
+  width: 100%;
+  text-align: center;
+  letter-spacing: 2px;
+}
+.visual-preview select {
+  max-width: 240px;
+}
+.visual-preview button,
+.visual-preview select {
+  color: #d8e6f4;
+  background: #101827;
+  border: 1px solid #354258;
+  border-radius: 5px;
+  padding: 7px;
+  font: inherit;
+}
+.visual-preview audio {
+  height: 30px;
+  width: 260px;
+}
+.visual-preview small {
+  width: 100%;
+  text-align: center;
+}
+
+body:has(.is-immersive) .view-switcher {
+  display: none;
+}
+.preview-decks {
+  display: flex;
+  gap: 12px;
+  width: 100%;
+}
+.preview-deck {
+  flex: 1;
+  min-width: 0;
+  border-top: 2px solid #26dcff;
+  padding-top: 8px;
+}
+.preview-deck-2 {
+  border-color: #ff338e;
+}
+.preview-deck-3 {
+  border-color: #ffa629;
+}
+.preview-deck label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.preview-deck select {
+  min-width: 0;
+  width: 100%;
+}
+.preview-deck > div {
+  display: flex;
+  gap: 5px;
+  margin-top: 6px;
+}
+.preview-deck input {
+  min-width: 30px;
+  width: 100%;
+  accent-color: #70cce9;
+}
+.preview-deck audio {
+  display: none;
+}
+
+.visual-preview:has(.preview-controls:not([open])) {
+  width: auto;
+}
+.preview-controls summary {
+  cursor: pointer;
+  padding: 3px 5px;
+}
+.preview-controls[open] {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+}
+.preview-controls[open] summary {
+  width: 100%;
+  margin-bottom: 10px;
+}
+.preview-controls > span {
+  display: block;
+  margin-bottom: 8px;
+}
+.preview-controls > a {
+  display: inline-block;
+  margin: 0 16px 12px 0;
+  color: #c3c9d4;
+}
+.preview-controls > button {
+  margin: 10px 8px 0 0;
 }
