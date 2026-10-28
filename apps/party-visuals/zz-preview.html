@@ -1,0 +1,56 @@
+<!doctype html><html><body style="margin:0;background:#000">
+<div style="position:relative;width:100vw;height:100vh"><canvas id="host" style="position:absolute;inset:0;width:100%;height:100%"></canvas></div>
+<script type="module">
+import { createInfiniteRings } from "./src/scenes/infinite-rings.ts";
+const host = document.getElementById("host");
+const style = document.createElement("style");
+style.textContent = "canvas{position:absolute;inset:0;width:100vw;height:100vh}";
+document.head.append(style);
+const query = new URLSearchParams(location.search);
+const engine = query.get("scene") === "pac-man"
+  ? await (await import("./src/scenes/pac-man.ts")).createPacMan(host)
+  : await createInfiniteRings(host, query.get("shape") ?? "rings");
+const params = new URLSearchParams(location.search);
+engine.setLook({ theme: params.get("theme") ?? "halloween", intensity: 1, motion: 1, density: 1, halloween: 1 });
+const rgba = new Uint8Array(3 * 256 * 4), energy = new Float32Array(12), motion = new Float32Array(12), origins = new Float32Array(6);
+for (let x = 0; x < 256; x++) rgba[x * 4 + 3] = 128 + 120 * Math.sin(x * 0.3);
+energy.set([0.5, 0.7, 0.5, 0.4]);
+// A fake 124 BPM track: syncopated kicks, snares on 2 and 4, busy hats, a breakdown every 32 s.
+const bpm = 124, beat = 60 / bpm, rate = 100, duration = 180;
+const peaks = [], colors = [], beatGrid = [];
+const kicks = [0, 3, 6, 10, 12], hats = [2, 5, 7, 9, 11, 13, 14, 15];
+for (let i = 0; i < duration * rate; i++) {
+  const t = i / rate, sixteenth = Math.floor(t / (beat / 4)), into = t % (beat / 4);
+  const step = sixteenth % 16, breakdown = Math.floor(t / 32) % 2 === 1 && t % 32 < 12;
+  const env = Math.exp(-into * 30);
+  const k = !breakdown && kicks.includes(step) ? env : 0;
+  const s = (step === 4 || step === 12) ? env * 0.9 : 0;
+  const h = hats.includes(step) ? env * 0.5 : 0;
+  const pad = breakdown ? 0.25 : 0.15;
+  peaks.push(Math.min(1, pad + k * 0.8 + s * 0.6 + h * 0.3));
+  colors.push([60 + k * 190, 60 + s * 190 + pad * 200, 60 + h * 190]);
+}
+for (let b = 0; b * beat < duration; b++) beatGrid.push({ beat: (b % 4) + 1, timeSeconds: b * beat });
+const waveform = { durationSeconds: duration, peaks, colors, beatGrid, source: "rekordbox" };
+const spectrum = new Uint8Array(512);
+const riff = [440, 523.25, 659.25, 587.33, 392, 440, 349.23, 392];
+const lanes = [{ trackId: "fake", waveform, time: 0, playing: true, level: 0.6, bpm, spectrum, sampleRate: 44100 }];
+const start = performance.now();
+const frame = (now) => {
+  const t = ((now - start) / 1000) % duration;
+  lanes[0].time = t;
+  motion[3] = t / beat;
+  const sixteenth = Math.floor(t / (beat / 4)) % 16, into = t % (beat / 4);
+  const breakdown = Math.floor(t / 32) % 2 === 1 && t % 32 < 12;
+  const env = Math.exp(-into * 20);
+  energy.set([breakdown ? 0.15 : 0.5, breakdown ? 0.1 : 0.35 + ([0, 3, 6, 10, 12].includes(sixteenth) ? env * 0.5 : 0), 0.45, 0.35]);
+  // The riff moves one note every half beat.
+  spectrum.fill(8);
+  const note = riff[Math.floor(t / (beat / 2)) % riff.length];
+  for (const harmonic of [1, 2]) spectrum[Math.round((note * harmonic) / (44100 / 1024))] = 230 / harmonic;
+  engine.setMusic(lanes);
+  engine.draw(t, rgba, energy, motion, origins);
+  requestAnimationFrame(frame);
+};
+requestAnimationFrame(frame);
+</script></body></html>

@@ -202,6 +202,46 @@ importers:
         specifier: 7.12.10
         version: 7.12.10
 
+  apps/party-visuals:
+    dependencies:
+      '@gakonst/dj-monitor':
+        specifier: workspace:*
+        version: link:../dj-monitor
+      react:
+        specifier: ^19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: ^19.2.7
+        version: 19.2.7(react@19.2.7)
+      three:
+        specifier: ^0.186.1
+        version: 0.186.1
+    devDependencies:
+      '@types/node':
+        specifier: ^22.19.7
+        version: 22.20.1
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.3(@types/react@19.2.17)
+      '@types/three':
+        specifier: ^0.186.0
+        version: 0.186.0
+      '@vitejs/plugin-react':
+        specifier: ^6.0.3
+        version: 6.0.3(vite@8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
+      '@webgpu/types':
+        specifier: ^0.1.74
+        version: 0.1.74
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vite:
+        specifier: ^8.1.4
+        version: 8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0)
+
   apps/site:
     dependencies:
       react:
