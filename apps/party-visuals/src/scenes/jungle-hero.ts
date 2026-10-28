@@ -6,6 +6,7 @@ import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js"
 import { DEFAULT_VISUAL_LOOK, type VisualLook } from "../../../dj-monitor/src/visual-presets.js";
 import {
   buildChart,
+  chartFor,
   idleWaveform,
   NOTE_LANES,
   type Chart,
@@ -989,7 +990,6 @@ export async function createJungleHero(host: HTMLCanvasElement): Promise<SceneEn
   let target: VisualLook = { ...DEFAULT_VISUAL_LOOK };
   const look = { ...target };
   let lanes: MusicLane[] = [];
-  const charts = new Map<string, Chart>();
   let idle: Chart | undefined;
   let idleClock = 0;
   let width = 0,
@@ -1017,16 +1017,10 @@ export async function createJungleHero(host: HTMLCanvasElement): Promise<SceneEn
   const up = new THREE.Vector3();
   const point = new THREE.Vector3();
 
-  const chartFor = (lane: MusicLane): Chart | undefined => {
-    if (!lane.trackId || !lane.waveform?.peaks.length) return undefined;
-    let chart = charts.get(lane.trackId);
-    if (!chart) {
-      chart = buildChart(lane.waveform, lane.bpm);
-      charts.set(lane.trackId, chart);
-      if (charts.size > 8) charts.delete(charts.keys().next().value!);
-    }
-    return chart;
-  };
+  const chartOf = (lane: MusicLane): Chart | undefined =>
+    lane.trackId && lane.waveform?.peaks.length
+      ? chartFor(lane.trackId, lane.waveform, lane.bpm, lane.rhythm)
+      : undefined;
 
   /** Follow the loudest playing deck; a loaded but paused deck still shows its chart. */
   const pickSource = (dt: number): Source => {
@@ -1038,7 +1032,7 @@ export async function createJungleHero(host: HTMLCanvasElement): Promise<SceneEn
       const bestRank = best ? (best.playing ? 10 : 0) + best.level : -1;
       if (rank > bestRank) ((best = lane), (bestIndex = i));
     });
-    const chart = best && chartFor(best);
+    const chart = best && chartOf(best);
     if (best && chart)
       return {
         key: `${bestIndex}:${best.trackId}`,
@@ -1256,7 +1250,7 @@ export async function createJungleHero(host: HTMLCanvasElement): Promise<SceneEn
           const span = Math.max(0.01, zStart - Math.max(zEnd, -(LENGTH - NEAR)));
           const held = note.time <= now;
           dummy.position.set(
-            x + (held ? Math.sin(sceneTime * 40) * 0.03 : 0),
+            x,
             0.06,
             zStart - span / 2,
           );
@@ -1437,7 +1431,7 @@ export async function createJungleHero(host: HTMLCanvasElement): Promise<SceneEn
 
       for (const layer of layers) {
         layer.material.uniforms.time!.value = sceneTime;
-        layer.material.uniforms.sway!.value = (0.6 + low * 1.2 + bump * 0.8) * calm * look.motion;
+        layer.material.uniforms.sway!.value = 0.5 * calm * look.motion;
       }
       sky.material.uniforms.glow!.value =
         (0.12 + pulse * 0.4 + bump * 0.15 + fever * 0.12) * intensity;
@@ -1451,11 +1445,9 @@ export async function createJungleHero(host: HTMLCanvasElement): Promise<SceneEn
       highwayMaterial.uniforms.fever!.value = fever;
       highwayMaterial.uniforms.pulse!.value = pulse + bump * 0.5;
 
-      // The camera sways a little so the jungle layers slide past each other.
+      // A fixed camera keeps the highway steady enough to read.
       camera.position.copy(base.position);
-      camera.position.x += Math.sin(sceneTime * 0.21) * 0.35 * calm;
-      camera.position.y += bump * 0.06 * calm + Math.sin(sceneTime * 0.33) * 0.12 * calm;
-      camera.lookAt(Math.sin(sceneTime * 0.21) * 0.15 * calm, 0, -11);
+      camera.lookAt(0, 0, -11);
 
       bloom.strength = (0.4 + pulse * 0.35 + fever * 0.1) * Math.min(1.6, intensity);
       renderer.toneMappingExposure = 1.05 + intensity * 0.1;

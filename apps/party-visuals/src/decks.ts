@@ -1,3 +1,4 @@
+import type { TrackRhythm } from "../../djbooth/src/shared/types.js";
 import type { TrackWaveform } from "../../dj-monitor/src/types.js";
 
 export type LibraryTrack = {
@@ -15,6 +16,9 @@ export const trackLabel = (track: LibraryTrack) =>
 
 let context: AudioContext | undefined;
 
+/** The page's shared audio graph, once a deck has been started by a user gesture. */
+export const audioContext = () => context;
+
 /** One preview player fed from the Rekordbox library, analysed for the visuals. */
 export class PreviewDeck {
   readonly audio = new Audio();
@@ -22,6 +26,7 @@ export class PreviewDeck {
   gain?: GainNode;
   track: LibraryTrack | null = null;
   waveform: TrackWaveform | null = null;
+  rhythm: TrackRhythm | null = null;
   fader: number;
   private loads = 0;
 
@@ -59,11 +64,18 @@ export class PreviewDeck {
     this.connect();
     this.track = track;
     this.waveform = null;
+    this.rhythm = null;
     this.audio.src = `/api/audio/${encodeURIComponent(track.id)}`;
     await this.audio.play();
-    const response = await fetch(`/api/waveforms/${encodeURIComponent(track.id)}`);
-    if (response.ok && load === this.loads)
-      this.waveform = ((await response.json()) as { waveform: TrackWaveform }).waveform;
+    const id = encodeURIComponent(track.id);
+    const [waveform, rhythm] = await Promise.all([
+      fetch(`/api/waveforms/${id}`),
+      // Older workbenches have no rhythm route; the chart then reads the colour waveform.
+      fetch(`/api/rhythm/${id}`).catch(() => undefined),
+    ]);
+    if (load !== this.loads) return;
+    if (rhythm?.ok) this.rhythm = ((await rhythm.json()) as { rhythm: TrackRhythm }).rhythm;
+    if (waveform.ok) this.waveform = ((await waveform.json()) as { waveform: TrackWaveform }).waveform;
   }
 
   async toggle() {

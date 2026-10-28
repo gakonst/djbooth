@@ -5,7 +5,13 @@ import type { TrackWaveform } from "../../../dj-monitor/src/types.js";
  * vocal passages, breakdowns and build-ups are, and where the rhythm does something unusual.
  */
 export type Style = "break" | "vocal" | "groove" | "build" | "drop";
-export type Section = { start: number; end: number; style: Style };
+export type Section = {
+  start: number;
+  end: number;
+  style: Style;
+  /** Where a fill leads into the next section, when the analysis marks one. */
+  fill?: number;
+};
 export type SongMap = {
   duration: number;
   /** Downbeat times in seconds. */

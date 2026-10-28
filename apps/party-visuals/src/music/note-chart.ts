@@ -1,5 +1,6 @@
+import type { TrackPhraseKind, TrackRhythm } from "../../../djbooth/src/shared/types.js";
 import type { TrackWaveform } from "../../../dj-monitor/src/types.js";
-import { analyzeSong, type SongMap, type Style } from "./song-map.js";
+import { analyzeSong, type Section, type SongMap, type Style } from "./song-map.js";
 
 export const NOTE_LANES = 5;
 
@@ -63,12 +64,23 @@ function percentile(values: ArrayLike<number>, p: number) {
   return sorted[Math.min(sorted.length - 1, Math.floor(p * sorted.length))] ?? 0;
 }
 
+/** Rekordbox's three-band detail waveform: interleaved low, mid, high bytes up to 127. */
+function detailBands(bands: NonNullable<TrackRhythm["bands"]>) {
+  const bytes = Uint8Array.from(atob(bands.data), (c) => c.charCodeAt(0));
+  const n = Math.floor(bytes.length / 3);
+  const out = Array.from({ length: BANDS }, () => new Float32Array(n));
+  for (let i = 0; i < n; i++) for (let b = 0; b < BANDS; b++) out[b]![i] = bytes[i * 3 + b]! / 127;
+  return { bands: out, rate: bands.rate };
+}
+
 /**
- * Per-band energy over the song. Rekordbox's colour waveform tints each column by its
- * balance of lows (red), mids (green) and highs (blue), with the strongest band at full
- * brightness, so height × each band's share of the tint approximates how loud it is.
+ * Per-band energy over the song, from the three-band detail when there is one. Otherwise
+ * from the colour waveform, which tints each column by its balance of lows (red), mids
+ * (green) and highs (blue) with the strongest band at full brightness, so height × each
+ * band's share of the tint approximates how loud it is.
  */
-function bandEnergy(waveform: TrackWaveform) {
+function bandEnergy(waveform: TrackWaveform, rhythm?: TrackRhythm | null) {
+  if (rhythm?.bands) return detailBands(rhythm.bands);
   const n = waveform.peaks.length;
   const bands = Array.from({ length: BANDS }, () => new Float32Array(n));
   for (let i = 0; i < n; i++) {
@@ -77,7 +89,46 @@ function bandEnergy(waveform: TrackWaveform) {
     const total = color ? color[0] + color[1] + color[2] : 0;
     for (let b = 0; b < BANDS; b++) bands[b]![i] = total > 0 ? (peak * color![b]!) / total : peak / BANDS;
   }
-  return bands;
+  return { bands, rate: n / waveform.durationSeconds };
+}
+
+/** How each Rekordbox phrase plays in the chart. */
+const PHRASE_STYLE: Record<TrackPhraseKind, Style> = {
+  intro: "groove",
+  verse: "groove",
+  up: "build",
+  chorus: "drop",
+  down: "break",
+  bridge: "break",
+  outro: "break",
+};
+
+/** The song's structure: Rekordbox's own phrases when analysed, otherwise read from the waveform. */
+export function songOf(waveform: TrackWaveform, bpm: number, rhythm?: TrackRhythm | null): SongMap {
+  const song = analyzeSong(waveform, bpm);
+  const phrases = rhythm?.phrases?.entries;
+  if (!phrases?.length) return song;
+  const sections: Section[] = phrases.map((phrase) => ({
+    start: phrase.startSeconds,
+    end: phrase.endSeconds,
+    style: PHRASE_STYLE[phrase.kind],
+    ...(phrase.fillSeconds !== null ? { fill: phrase.fillSeconds } : {}),
+  }));
+  return { ...song, sections };
+}
+
+const charts = new Map<string, Chart>();
+
+/** One chart per track and analysis, shared by the scene and the click track. */
+export function chartFor(trackId: string, waveform: TrackWaveform, bpm: number, rhythm?: TrackRhythm | null) {
+  const key = `${trackId}:${rhythm?.bands ? "detail" : "color"}:${rhythm?.phrases ? "phrases" : ""}`;
+  let chart = charts.get(key);
+  if (!chart) {
+    chart = buildChart(waveform, bpm, rhythm);
+    charts.set(key, chart);
+    if (charts.size > 24) charts.delete(charts.keys().next().value!);
+  }
+  return chart;
 }
 
 type Slot = {
@@ -101,13 +152,13 @@ type Slot = {
  * (strong beats only) and gets harder through the song, every bar keeps its pulse, and
  * every section change is marked: a crash chord on each drop with a roll leading into it.
  */
-export function buildChart(waveform: TrackWaveform, bpm: number): Chart {
-  const song = analyzeSong(waveform, bpm);
+export function buildChart(waveform: TrackWaveform, bpm: number, rhythm?: TrackRhythm | null): Chart {
+  const song = songOf(waveform, bpm, rhythm);
   const frets = beatsOf(waveform, bpm);
-  const n = waveform.peaks.length;
   const duration = waveform.durationSeconds;
-  const rate = n / duration;
-  const bands = bandEnergy(waveform);
+  const { bands, rate } = bandEnergy(waveform, rhythm);
+  const detail = !!rhythm?.bands;
+  const n = bands[0]!.length;
   const at = (t: number) => Math.max(0, Math.min(n - 1, Math.round(t * rate)));
   const max = (band: Float32Array, from: number, to: number) => {
     let value = 0;
@@ -166,10 +217,8 @@ export function buildChart(waveform: TrackWaveform, bpm: number): Chart {
   /** A band hits in a slot when its onset clears the threshold and peaks there, not a neighbour. */
   const hits = (i: number, b: number) => {
     const o = slots[i]!.onset[b]!;
-    const style = slots[i]!.style;
-    const threshold = THRESHOLD[b]! * (style === "break" ? 1.2 : 1);
     return (
-      o >= threshold &&
+      o >= THRESHOLD[b]! &&
       o >= (slots[i - 1]?.onset[b] ?? 0) &&
       o > (slots[i + 1]?.onset[b] ?? 0) * 0.9
     );
@@ -198,6 +247,8 @@ export function buildChart(waveform: TrackWaveform, bpm: number): Chart {
     sub: number;
     /** Strong enough to chart off the eighth-note grid at hard. */
     strong: boolean;
+    /** Placed to keep the beat going; always shown, whatever the density. */
+    pulse?: boolean;
   };
   const candidates: Candidate[] = [];
   const brights = slots.map((s) => s.bright).sort((a, b) => a - b);
@@ -233,7 +284,9 @@ export function buildChart(waveform: TrackWaveform, bpm: number): Chart {
       });
 
     if (low && slot.sub === 0) push(KICK_LANE, "kick", LOW, 0.2);
-    else if (low) push(BASS_LANE, "bass", LOW);
+    // Off-beat bass only reads reliably from the three-band detail; against the audio, the
+    // colour waveform's off-beat lows land on a real bass hit less than a quarter of the time.
+    else if (low && detail) push(BASS_LANE, "bass", LOW);
     // Mids hitting together with highs read as a snare or clap; mids alone as melody.
     if (mid && high && slot.sub % 2 === 0 && slot.onset[HIGH]! > 0.4) push(SNARE_LANE, "snare", MID, 0.15);
     else if (mid) {
@@ -245,29 +298,33 @@ export function buildChart(waveform: TrackWaveform, bpm: number): Chart {
     if (high && !mid) push(HAT_LANES[hat++ % HAT_LANES.length]!, "hat", HIGH, -0.15);
   });
 
-  // Transitions are always charted: every section opens on a big note, drops land on a
-  // crash chord, and the bar before each drop is a roll sweeping across the lanes.
+  // Transitions are always charted: every section opens on a big note, entering a drop or
+  // chorus lands on a crash chord, and a roll sweeps across the lanes where the analysis
+  // marks a fill (or through the bar before a drop when it marks none).
   const nearestFret = (t: number) =>
     frets.reduce((best, f) => (Math.abs(f.time - t) < Math.abs(best - t) ? f.time : best), Infinity);
   const forced: Candidate[] = [];
   const rolls: [number, number][] = [];
   const force = (time: number, lane: number, sound: Sound, length = 0) =>
     forced.push({ time, lane, length, sound, weight: 5, big: true, sub: 0, strong: true });
+  const roll = (from: number, to: number, tier: number) => {
+    const step = tier === 0 ? beat : beat / 2;
+    rolls.push([from - 0.01, to + 0.01]);
+    const sweep = [0, 1, 2, 3, 4, 3, 2, 1];
+    for (let k = 0, t = from; t < to - 0.01; k++, t += step)
+      forced.push({ time: t, lane: sweep[k % sweep.length]!, length: 0, sound: "snare", weight: 4, big: false, sub: 0, strong: true });
+  };
   song.sections.forEach((section, i) => {
     if (i === 0) return;
+    const previous = song.sections[i - 1]!;
     const time = nearestFret(section.start);
     const tier = tierAt(time, section.style);
-    if (section.style === "drop") {
-      for (const lane of tier === 0 ? [1, 3] : [0, 2, 4]) force(time, lane, "crash");
-      const from = time - bar;
-      const step = tier === 0 ? beat : beat / 2;
-      rolls.push([from - 0.01, time + 0.01]);
-      const sweep = [0, 1, 2, 3, 4, 3, 2, 1];
-      for (let k = 0, t = from; t < time - 0.01; k++, t += step)
-        forced.push({ time: t, lane: sweep[k % sweep.length]!, length: 0, sound: "snare", weight: 4, big: false, sub: 0, strong: true });
-    } else if (section.style === "break") {
-      force(time, 2, "melody", Math.min(section.end - section.start, bar * 2) * 0.9);
-    } else force(time, 2, section.style === "build" ? "snare" : "kick");
+    const entering = section.style === "drop" && previous.style !== "drop";
+    if (previous.fill !== undefined) roll(nearestFret(Math.max(previous.fill, time - bar * 2)), time, tier);
+    else if (entering) roll(time - bar, time, tier);
+    if (entering) for (const lane of tier === 0 ? [1, 3] : [0, 2, 4]) force(time, lane, "crash");
+    else if (section.style === "break") force(time, 2, "melody", Math.min(section.end - section.start, bar * 2) * 0.9);
+    else force(time, 2, section.style === "drop" ? "crash" : section.style === "build" ? "snare" : "kick");
   });
 
   // Regular hits, grouped by moment, then thinned to the tier's grid, sounds and spacing.
@@ -323,9 +380,9 @@ export function buildChart(waveform: TrackWaveform, bpm: number): Chart {
     }
   }
 
-  // Keep the pulse: wherever there is music and nothing charted for a stretch (a bar at
-  // easy, half a bar at medium, a beat at hard), the beat gets a note in the lane of
-  // whichever sound is loudest on it.
+  // Keep the pulse: wherever there is music and nothing charted for a stretch (two beats
+  // at easy, a beat after that), the beat gets a note in the lane of whichever sound is
+  // loudest on it.
   const onBeat = new Map(slots.filter((s) => s.sub === 0).map((s) => [Math.round(s.time * 1000), s]));
   section = 0;
   let beatInBar = 0;
@@ -333,7 +390,7 @@ export function buildChart(waveform: TrackWaveform, bpm: number): Chart {
     beatInBar = fret.downbeat ? 0 : beatInBar + 1;
     const slot = onBeat.get(Math.round(fret.time * 1000));
     if (!slot || Math.max(...slot.level) < 0.08) continue;
-    const every = [4, 2, 1][tierAt(fret.time, styleAt(fret.time))]!;
+    const every = [2, 1, 1][tierAt(fret.time, styleAt(fret.time))]!;
     if (beatInBar % every) continue;
     const at = insert(fret.time - 0.01);
     if ((taken[at] ?? Infinity) < fret.time + every * beat - 0.01) continue;
@@ -342,7 +399,7 @@ export function buildChart(waveform: TrackWaveform, bpm: number): Chart {
     const loudest = slot.onset.indexOf(Math.max(...slot.onset));
     const [lane, sound]: [number, Sound] =
       loudest === LOW ? [KICK_LANE, "kick"] : loudest === MID ? [melodyLane, "melody"] : [HAT_LANES[0]!, "hat"];
-    kept.push({ time: fret.time, lane, length: 0, sound, weight: 1, big: false, sub: 0, strong: false });
+    kept.push({ time: fret.time, lane, length: 0, sound, weight: 1, big: false, sub: 0, strong: false, pulse: true });
   }
   kept.sort((a, b) => a.time - b.time || a.lane - b.lane);
 
@@ -365,15 +422,26 @@ export function buildChart(waveform: TrackWaveform, bpm: number): Chart {
     .map((c) => c.weight)
     .sort((a, b) => a - b);
   const hardest = weights[Math.floor(weights.length * 0.97)] ?? Infinity;
-  const order = kept.map((_, i) => i).sort((a, b) => kept[a]!.weight - kept[b]!.weight);
-  const ranks = new Float32Array(kept.length);
-  order.forEach((c, i) => (ranks[c] = i / Math.max(1, order.length - 1)));
+  // Rank each note against its neighbours (about eight bars either way), so the density
+  // slider thins every part of the song evenly instead of emptying the easy opening.
+  const window = bar * 8;
+  const ranks = kept.map((c) => {
+    let below = 0,
+      around = 0;
+    for (const other of kept) {
+      if (Math.abs(other.time - c.time) > window) continue;
+      around++;
+      if (other.weight < c.weight) below++;
+    }
+    return below / Math.max(1, around - 1);
+  });
   const notes: Note[] = kept.map((c, i) => ({
     time: c.time,
     lane: c.lane,
     length: c.length,
     big: c.big || (regular(c) && c.weight >= hardest && c.sound !== "hat"),
-    rank: ranks[i]!,
+    // Transitions, rolls and the pulse are the chart's backbone and survive any density.
+    rank: c.pulse || c.weight >= 4 ? 1 : ranks[i]!,
     sound: c.sound,
   }));
   return { song, notes, frets };

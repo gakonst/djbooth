@@ -499,7 +499,7 @@ export function DeckBar({
       })}
       <span className="deck-hint">
         <kbd>Space</kbd>/<kbd>⇧Space</kbd> play · <kbd>X</kbd> crossfade · <kbd>,</kbd>
-        <kbd>.</kbd> ±10s
+        <kbd>.</kbd> ±10s · <kbd>K</kbd> click
       </span>
     </footer>
   );
@@ -524,6 +524,7 @@ const SHORTCUTS: Record<Mode, [string, string][]> = {
     ["M / ⇧M", "Load song on deck A / B (Tab switches playlist)"],
     ["Space / ⇧Space", "Play or pause deck A / B"],
     ["X", "Crossfade between decks"],
+    ["K", "Click track: tick on every charted note"],
     [", .", "Deck A back / forward 10s"],
   ],
   play: [
@@ -535,6 +536,7 @@ const SHORTCUTS: Record<Mode, [string, string][]> = {
     ["H", "Operator hints on / off"],
     ["Space", "Play or pause deck A"],
     ["X", "Crossfade between decks"],
+    ["K", "Click track: tick on every charted note"],
   ],
 };
 

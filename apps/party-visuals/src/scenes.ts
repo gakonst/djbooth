@@ -1,3 +1,4 @@
+import type { TrackRhythm } from "../../djbooth/src/shared/types.js";
 import type { TrackWaveform } from "../../dj-monitor/src/types.js";
 import type { VisualLook } from "../../dj-monitor/src/visual-presets.js";
 
@@ -14,6 +15,8 @@ export type MusicLane = {
   /** Live analyser magnitudes (0–255 per bin), zero while the deck is silent. */
   spectrum?: Uint8Array;
   sampleRate?: number;
+  /** Rekordbox's three-band detail waveform and phrases, when the track has them. */
+  rhythm?: TrackRhythm | null;
 };
 
 /** The engine contract every booth scene in apps/dj-monitor already implements. */

@@ -7,6 +7,7 @@ import { DEFAULT_VISUAL_LOOK, type VisualLook } from "../../../dj-monitor/src/vi
 import { createMusicFollower } from "../music/follow.js";
 import { sectionAt, type SongMap } from "../music/song-map.js";
 import type { MusicLane, SceneEngine } from "../scenes.js";
+import { createRace, KART_LEAD } from "./rainbow-race.js";
 import { buildCourse, COURSE_RATE, courseFrame, type Course } from "./rainbow-course.js";
 
 const WIDTH = 16;
@@ -502,6 +503,10 @@ export async function createRainbowRoad(host: HTMLCanvasElement): Promise<SceneE
     return group;
   });
 
+  // The race itself: karts, rivals, items. The camera joins the scene so speed lines can ride on it.
+  scene.add(camera);
+  const race = createRace(course3d, camera, host);
+
   const composer = new EffectComposer(renderer);
   composer.addPass(new RenderPass(scene, camera));
   const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.4, 0.35, 0.88);
@@ -552,11 +557,9 @@ export async function createRainbowRoad(host: HTMLCanvasElement): Promise<SceneE
   const hitLane = (row: number) => (hash(row + 11) > 0.5 ? 2 : 1);
   const rowShown = (row: number) => hash(row) <= 0.3 + look.density * 0.7;
   const broken = new Set<number>();
-  const inverse = new THREE.Matrix4();
-  const cameraLocal = new THREE.Vector3();
   const boxLocal = new THREE.Vector3();
   let steer = 0;
-  let aim = 0;
+  let lift = 2.8;
 
   const smash = (at: THREE.Vector3, frame: Frame, speed: number) => {
     for (let n = 0; n < 34; n++) {
@@ -615,34 +618,35 @@ export async function createRainbowRoad(host: HTMLCanvasElement): Promise<SceneE
     pop = Math.max(0, pop - dt * 3);
   };
 
-  /** Steer towards the next box, and smash it just before the camera reaches it. */
-  const driveThroughBoxes = (head: number, speed: number, dt: number) => {
-    cameraLocal.copy(camera.position).applyMatrix4(inverse.copy(placement).invert());
+  /** Steer the kart into the next box, and smash it as the kart reaches it. */
+  const driveThroughBoxes = (kartDistance: number, speed: number, dt: number, time: number) => {
     let steerTarget = 0,
       aimTarget = 0;
     for (const row of course.items) {
-      if (row < head - 90 || row > head + 120 || !rowShown(row) || broken.has(row)) continue;
-      courseFrame(course, row, scratch);
+      if (!rowShown(row) || broken.has(row)) continue;
+      const ahead = course.distance[row]! - kartDistance;
+      if (ahead < -10 || ahead > 70) continue;
       const offset = laneOffset(hitLane(row));
-      boxLocal.copy(scratch.point).addScaledVector(scratch.right, offset).addScaledVector(scratch.up, 1.9);
-      const ahead = tmp.copy(boxLocal).sub(cameraLocal).dot(scratch.tangent);
-      if (ahead < 2.5 && ahead > -15) {
+      if (ahead < 1) {
         broken.add(row);
+        courseFrame(course, row, scratch);
+        boxLocal.copy(scratch.point).addScaledVector(scratch.right, offset).addScaledVector(scratch.up, 1.9);
         smash(boxLocal, scratch, speed);
-      } else if (ahead >= 2.5 && ahead < 55 && !aimTarget) {
-        aimTarget = THREE.MathUtils.smoothstep(ahead, 55, 22);
+        race.smashed(time);
+      } else if (!aimTarget) {
+        aimTarget = THREE.MathUtils.smoothstep(ahead, 70, 30);
         steerTarget = offset * aimTarget;
       }
     }
     // Ease out of the way afterwards just as gently as into it.
     steer += (steerTarget - steer) * (1 - Math.exp(-dt * 3));
-    aim += (aimTarget - aim) * (1 - Math.exp(-dt * 3));
     animateDebris(dt);
   };
 
   /** Lay out a new course, placed so it continues seamlessly from where the kart is now. */
   const relayout = () => {
     broken.clear();
+    race.reset();
     course = buildCourse(source.song, speedScale);
     courseKey = `${source.key}:${speedScale}`;
     const local = courseFrame(course, source.time * COURSE_RATE, scratch);
@@ -831,24 +835,29 @@ export async function createRainbowRoad(host: HTMLCanvasElement): Promise<SceneE
 
       const style = sectionAt(source.song, source.time)?.style ?? "vocal";
       const speed = (course.distance[Math.min(course.count - 1, head + 1)]! - headDistance) * COURSE_RATE;
-      driveThroughBoxes(head, speed, dt);
-      // Breakdowns lift the camera away from the road, like floating; a box ahead pulls it down to meet it.
-      eye
-        .copy(here.point)
-        .addScaledVector(here.up, (style === "break" ? 5 : 3.4) - aim * 1.3)
-        .addScaledVector(here.right, steer);
-      if (!placed || camera.position.distanceTo(eye) > 40) {
-        camera.position.copy(eye);
+      const kartDistance =
+        headDistance + (index - head) * (course.distance[Math.min(course.count - 1, head + 1)]! - headDistance) + KART_LEAD;
+      driveThroughBoxes(kartDistance, speed, dt, time);
+      // A chase camera just behind the kart; breakdowns lift it away, like floating.
+      lift += ((style === "break" ? 4.2 : 2.8) - lift) * (1 - Math.exp(-dt * 2));
+      eye.copy(here.point).addScaledVector(here.up, lift).addScaledVector(here.right, steer * 0.7);
+      camera.position.copy(eye);
+      if (!placed) {
         camera.up.copy(here.up);
         placed = true;
-      } else {
-        camera.position.lerp(eye, 1 - Math.exp(-dt * 8));
-        // Following the road's up vector makes swirls and banking roll the whole screen.
-        camera.up.lerp(here.up, 1 - Math.exp(-dt * 5)).normalize();
       }
-      camera.lookAt(focus.copy(ahead.point).addScaledVector(ahead.up, 1.6).addScaledVector(ahead.right, steer * 0.6));
+      // Following the road's up vector makes swirls and banking roll the whole screen.
+      camera.up.lerp(here.up, 1 - Math.exp(-dt * 5)).normalize();
+      camera.lookAt(focus.copy(ahead.point).addScaledVector(ahead.up, 1.2).addScaledVector(ahead.right, steer * 0.6));
+      // Boosts and star power widen the view, as if the world rushes past.
+      const fov = 64 + race.state.boost * 16 + race.state.star * 5;
+      if (Math.abs(camera.fov - fov) > 0.01) {
+        camera.fov = fov;
+        camera.updateProjectionMatrix();
+      }
       backdrop.position.copy(camera.position);
       layRoad(head - BEHIND);
+      race.update({ course, songTime: source.time, time, dt, distance: kartDistance, steer, density: look.density });
 
       const energy = Math.min(1, energyAt(source.song, source.time));
       const glow = (0.75 + look.intensity * 0.25) * (style === "drop" ? 1.12 : style === "break" ? 0.85 : 1);
@@ -877,11 +886,15 @@ export async function createRainbowRoad(host: HTMLCanvasElement): Promise<SceneE
         (source.key === "idle" ? "Demo course (no song playing)" : "Following the loudest deck") +
         ` · ${style.toUpperCase()}` +
         (next ? ` · ${next.style} in ${Math.ceil(next.start - source.time)}s` : "") +
-        (swirlSoon ? " · swirl!" : "");
+        (swirlSoon ? " · swirl!" : "") +
+        ` · ${["1st", "2nd", "3rd"][race.state.place - 1] ?? `${race.state.place}th`} place` +
+        (race.state.boost > 0.2 ? " · BOOST" : "") +
+        (race.state.star > 0.5 ? " · STAR" : "");
 
       composer.render(dt);
     },
     dispose() {
+      race.dispose();
       composer.dispose();
       for (const item of disposables) item.dispose();
       posts.dispose();

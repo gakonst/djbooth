@@ -6,7 +6,9 @@ export const COURSE_RATE = 30;
 const EXTRA_SECONDS = 30;
 
 export const STYLES: Style[] = ["break", "vocal", "groove", "build", "drop"];
-const SPEED: Record<Style, number> = { break: 24, vocal: 32, groove: 36, build: 42, drop: 52 };
+const SPEED: Record<Style, number> = { break: 30, vocal: 40, groove: 46, build: 54, drop: 64 };
+/** How much faster a full mushroom boost runs. */
+const BOOST_GAIN = 0.55;
 
 /**
  * The road laid out along a song: every sample is where the kart is at that moment of the
@@ -26,6 +28,11 @@ export type Course = {
   /** Sample indices of item-box rows and dash panels. */
   items: number[];
   dashes: number[];
+  /** Mushroom boost, 0–1, per sample. */
+  boost: Float32Array;
+  /** Song times when a mushroom is grabbed, and when star power runs. */
+  mushrooms: number[];
+  stars: { start: number; end: number }[];
 };
 
 const smoother = (x: number) => {
@@ -54,6 +61,9 @@ export function buildCourse(song: SongMap, speedScale: number): Course {
     energy: new Float32Array(count),
     items: [],
     dashes: [],
+    boost: new Float32Array(count),
+    mushrooms: [],
+    stars: [],
   };
   const dt = 1 / COURSE_RATE;
   const bars = song.bars.length ? song.bars : [0];
@@ -80,13 +90,35 @@ export function buildCourse(song: SongMap, speedScale: number): Course {
       side = -side;
       turns.push({ at: section.start, width: bar * 1.5, angle: side * 1.25 });
     }
-    if (section.style === "drop") {
-      for (let t = section.start + bar * 8; t < section.end - bar * 2; t += bar * 8) {
-        side = -side;
-        turns.push({ at: t, width: bar, angle: side * Math.PI * 0.5 });
-      }
+    // Something to steer through every 4 bars: hairpins in drops, sweeping bends elsewhere.
+    const sharp = section.style === "drop";
+    for (let t = section.start + bar * 4; t < section.end - bar * 2; t += bar * 4) {
+      side = -side;
+      turns.push({ at: t, width: sharp ? bar : bar * 1.25, angle: side * (sharp ? Math.PI * 0.5 : 0.9) });
     }
   });
+
+  // Mushrooms: a big boost the moment each drop hits, a small one now and then in grooves.
+  type Boost = { at: number; length: number; strength: number };
+  const boosts: Boost[] = [];
+  for (const section of song.sections) {
+    const bar = barLength(barAt(section.start));
+    if (section.style === "drop") {
+      boosts.push({ at: section.start, length: bar * 2, strength: 1 });
+      course.stars.push({ start: section.start + bar * 2, end: Math.min(section.end, section.start + bar * 6) });
+    }
+    if (section.style === "groove")
+      for (let t = section.start + bar * 6; t < section.end - bar; t += bar * 8)
+        boosts.push({ at: t, length: bar, strength: 0.6 });
+  }
+  course.mushrooms = boosts.map((b) => b.at);
+  const boostAt = (t: number) =>
+    boosts.reduce((sum, b) => {
+      if (t < b.at || t > b.at + b.length) return sum;
+      const rise = Math.min(1, (t - b.at) / 0.15);
+      const fall = 1 - smoother((t - b.at - b.length * 0.4) / (b.length * 0.6));
+      return Math.max(sum, b.strength * rise * fall);
+    }, 0);
   const swirlLength = (t: number) => barLength(barAt(t)) / 2;
 
   const position = new THREE.Vector3();
@@ -169,8 +201,11 @@ export function buildCourse(song: SongMap, speedScale: number): Course {
     }
     if (startsSection && style === "drop") course.dashes.push(i);
 
-    position.addScaledVector(forward, speed * dt);
-    distance += speed * dt;
+    const boost = boostAt(t);
+    course.boost[i] = boost;
+    const travel = speed * (1 + boost * BOOST_GAIN) * dt;
+    position.addScaledVector(forward, travel);
+    distance += travel;
   }
   for (const turn of turns)
     if (Math.abs(turn.angle) > 1.5) course.dashes.push(Math.round((turn.at - turn.width) * COURSE_RATE));

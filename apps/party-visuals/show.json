@@ -5,7 +5,7 @@
     {
       "id": "haunted-booth",
       "name": "Haunted Booth",
-      "scene": "jungle-hero",
+      "scene": "rainbow-road",
       "look": {
         "theme": "y2k",
         "intensity": 0.15,
@@ -14,8 +14,8 @@
         "halloween": 1
       },
       "intro": "fade",
-      "updatedAt": 1793155093459,
-      "thumbAt": 1793155096986
+      "updatedAt": 1793156212653,
+      "thumbAt": 1793156216200
     },
     {
       "name": "Architecture",

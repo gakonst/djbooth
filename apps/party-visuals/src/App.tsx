@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DEFAULT_VISUAL_LOOK } from "../../dj-monitor/src/visual-presets.js";
 import { previewDecks } from "./decks.js";
+import { ClickTrack } from "./music/click-track.js";
 import { DeckBar, HelpOverlay, Inspector, LibraryOverlay, ScenePicker, SongSearch } from "./panels.js";
 import { SCENES, sceneInfo, type SceneId } from "./scenes.js";
 import {
@@ -25,6 +26,7 @@ const typing = (target: EventTarget | null) =>
 
 export function App() {
   const decks = useMemo(() => previewDecks(), []);
+  const clicks = useMemo(() => new ClickTrack(decks), [decks]);
   const stageRef = useRef<HTMLDivElement>(null);
   const stage = useRef<Stage>(undefined);
   const [show, setShow] = useState<Show | null>(null);
@@ -199,6 +201,10 @@ export function App() {
       return void decks[event.shiftKey ? 1 : 0]?.toggle();
     }
     if (key === "x" || key === "X") return crossfade();
+    if (key === "k" || key === "K") {
+      handled();
+      return flash(clicks.toggle() ? "Click track on: a tick on every note" : "Click track off");
+    }
     if (key === "," || key === ".") {
       const deck = decks[0]!;
       return deck.seek(deck.audio.currentTime + (key === "," ? -10 : 10));

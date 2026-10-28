@@ -94,6 +94,7 @@ export function createStage(container: HTMLElement, decks: PreviewDeck[]) {
       if (music && deck) {
         music.trackId = deck.track?.id ?? null;
         music.waveform = deck.waveform;
+        music.rhythm = deck.rhythm;
         music.time = deck.audio.currentTime;
         music.playing = playing;
         music.level = audible[lane]!;
