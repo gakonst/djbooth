@@ -33,6 +33,8 @@ import type {
   TrackBeatGridEntry,
   TrackCue,
   TrackColorId,
+  TrackPhraseKind,
+  TrackRhythm,
   TrackSummary,
   TrackSort,
   TrackSortField,
@@ -294,6 +296,19 @@ function waveformColors(value: unknown): Array<[number, number, number]> {
     const foreground = waveformColor(Array.isArray(color) ? color[0] : undefined);
     return foreground ? [foreground] : [];
   });
+}
+
+/** Rekordbox phrase ids: high mood uses Intro/Up/Down/Chorus/Outro, mid and low moods use verses and a bridge. */
+function phraseKind(mood: number, kind: number): TrackPhraseKind {
+  if (mood === 1)
+    return (
+      ({ 1: "intro", 2: "up", 3: "down", 5: "chorus", 6: "outro" } as const)[kind as 1] ?? "up"
+    );
+  if (kind === 1) return "intro";
+  if (kind === 8) return "bridge";
+  if (kind === 9) return "chorus";
+  if (kind === 10) return "outro";
+  return "verse";
 }
 
 function normalizeWaveform(
@@ -1071,6 +1086,43 @@ export class RekordboxLibraryService {
     if (this.waveformCache.size > 128)
       this.waveformCache.delete(this.waveformCache.keys().next().value!);
     return result;
+  }
+
+  /** The three-band detail waveform and phrase structure Rekordbox already analysed. */
+  getRhythm(id: string): TrackRhythm {
+    const { durationSeconds, beatGrid = [] } = this.getWaveform(id);
+    const rhythm: TrackRhythm = { durationSeconds };
+    let files: ReturnType<ReturnType<typeof this.getDatabase>["readContentAnlzFiles"]>;
+    try {
+      files = this.getDatabase().readContentAnlzFiles(id);
+    } catch {
+      return rhythm;
+    }
+    for (const file of files.values()) {
+      if (!rhythm.bands && file.has("PWV7")) {
+        const entries = file.get("PWV7") as Array<[number, number, number]>;
+        rhythm.bands = { rate: 150, data: Buffer.from(entries.flat()).toString("base64") };
+      }
+      if (!rhythm.phrases && file.has("PSSI") && beatGrid.length) {
+        const structure = file.get("PSSI") as {
+          mood: number;
+          endBeat: number;
+          entries: Array<{ beat: number; kind: number; fill: number; beatFill: number }>;
+        };
+        // Phrase positions are 1-based beat numbers in the beat grid.
+        const beatTime = (beat: number) =>
+          beatGrid[Math.max(0, Math.min(beatGrid.length - 1, beat - 1))]!.timeSeconds;
+        const entries = structure.entries.map((entry, index) => ({
+          kind: phraseKind(structure.mood, entry.kind),
+          startSeconds: beatTime(entry.beat),
+          endSeconds: beatTime(structure.entries[index + 1]?.beat ?? structure.endBeat),
+          fillSeconds: entry.fill && entry.beatFill ? beatTime(entry.beatFill) : null,
+        }));
+        const mood = structure.mood === 1 ? "high" : structure.mood === 2 ? "mid" : "low";
+        if (entries.length) rhythm.phrases = { mood, entries };
+      }
+    }
+    return rhythm;
   }
 
   getVisualShow(): VisualShow {
