@@ -37,6 +37,7 @@ import type {
   PromptPlan,
   TrackDetail,
   TrackSummary,
+  TrackRhythm,
   TrackWaveform,
   TracksResponse,
   TrackSort,
@@ -207,6 +208,7 @@ export type LibraryApi = {
   getPlaylists(): PlaylistItem[];
   getTrack(id: string): TrackDetail;
   getWaveform(id: string): TrackWaveform;
+  getRhythm?(id: string): TrackRhythm;
   getTracks(options?: {
     filter?: TrackFilter;
     limit?: number;
@@ -1199,6 +1201,15 @@ export async function startLibraryServer(
           response,
           await api.getArtwork(decodeURIComponent(artworkMatch[1]!)),
         );
+        return;
+      }
+      const rhythmMatch = /^\/api\/rhythm\/([^/]+)$/u.exec(url.pathname);
+      if (rhythmMatch) {
+        assertMethod(request, ["GET", "HEAD"]);
+        const trackId = decodeURIComponent(rhythmMatch[1]!);
+        if (trackId.startsWith("usb:") || !api.getRhythm)
+          throw new HttpError(404, "RHYTHM_UNAVAILABLE", "No rhythm analysis for this track");
+        json(request, response, 200, { rhythm: api.getRhythm(trackId) });
         return;
       }
       const waveformMatch = /^\/api\/waveforms\/([^/]+)$/u.exec(url.pathname);

@@ -215,6 +215,28 @@ export type TrackWaveform = {
   source: "rekordbox" | "placeholder";
 };
 
+/** Rekordbox phrase names across the high, mid and low song-structure moods. */
+export type TrackPhraseKind = "intro" | "up" | "down" | "verse" | "bridge" | "chorus" | "outro";
+
+export type TrackPhrase = {
+  kind: TrackPhraseKind;
+  startSeconds: number;
+  endSeconds: number;
+  /** Where Rekordbox marks a fill leading into the next phrase. */
+  fillSeconds: number | null;
+};
+
+/**
+ * Inputs for music-following visuals, from a track's Rekordbox analysis: the 150 Hz
+ * three-band detail waveform (`PWV7`) and the phrase structure (`PSSI`).
+ */
+export type TrackRhythm = {
+  durationSeconds: number | null;
+  /** Interleaved low/mid/high amplitudes (0–127), base64 encoded, at `rate` columns per second. */
+  bands?: { rate: number; data: string };
+  phrases?: { mood: "high" | "mid" | "low"; entries: TrackPhrase[] };
+};
+
 export type TrackBeatGridEntry = {
   beat: 1 | 2 | 3 | 4;
   timeSeconds: number;

@@ -1,0 +1,215 @@
+{
+  "version": 1,
+  "liveId": "haunted-booth",
+  "designs": [
+    {
+      "id": "haunted-booth",
+      "name": "Haunted Booth",
+      "scene": "rainbow-road",
+      "look": {
+        "theme": "y2k",
+        "intensity": 0.15,
+        "motion": 1.2,
+        "density": 0.65,
+        "halloween": 1
+      },
+      "intro": "fade",
+      "updatedAt": 1793156212653,
+      "thumbAt": 1793156216200
+    },
+    {
+      "name": "Architecture",
+      "scene": "infinite-vinyl",
+      "look": {
+        "theme": "y2k",
+        "intensity": 0.15,
+        "motion": 1.2,
+        "density": 0.65,
+        "halloween": 1
+      },
+      "intro": "fade",
+      "id": "architecture-2",
+      "updatedAt": 1793153951289,
+      "thumbAt": 1793153954821
+    },
+    {
+      "id": "corn-maze",
+      "name": "Corn Maze",
+      "scene": "corn-maze",
+      "look": {
+        "theme": "halloween",
+        "intensity": 1,
+        "motion": 1,
+        "density": 1,
+        "halloween": 1
+      },
+      "intro": "fade",
+      "updatedAt": 0,
+      "thumbAt": 1793154219461
+    },
+    {
+      "id": "neon-midnight",
+      "name": "Neon Midnight",
+      "scene": "halloween",
+      "look": {
+        "theme": "eighties",
+        "intensity": 0.75,
+        "motion": 0.65,
+        "density": 0.7,
+        "halloween": 0.35
+      },
+      "intro": "fade",
+      "updatedAt": 0,
+      "thumbAt": 1793072393831
+    },
+    {
+      "id": "y2k-pop",
+      "name": "Y2K Pop",
+      "scene": "halloween",
+      "look": {
+        "theme": "y2k",
+        "intensity": 1,
+        "motion": 1,
+        "density": 0.9,
+        "halloween": 0.45
+      },
+      "intro": "fade",
+      "updatedAt": 0,
+      "thumbAt": 1793072457506
+    },
+    {
+      "id": "after-dark",
+      "name": "After Dark",
+      "scene": "halloween",
+      "look": {
+        "theme": "tech-house",
+        "intensity": 1.25,
+        "motion": 1.15,
+        "density": 1,
+        "halloween": 0.6
+      },
+      "intro": "fade",
+      "updatedAt": 0,
+      "thumbAt": 1793072492524
+    },
+    {
+      "id": "space-race",
+      "name": "Space Race",
+      "scene": "race",
+      "look": {
+        "theme": "eighties",
+        "intensity": 0.9,
+        "motion": 1,
+        "density": 0.8,
+        "halloween": 1
+      },
+      "intro": "fade",
+      "updatedAt": 0,
+      "thumbAt": 1793072527534
+    },
+    {
+      "id": "temple-run",
+      "name": "Temple Run",
+      "scene": "temple-run",
+      "look": {
+        "theme": "halloween",
+        "intensity": 1,
+        "motion": 1,
+        "density": 1,
+        "halloween": 1
+      },
+      "intro": "fade",
+      "updatedAt": 0,
+      "thumbAt": 1793072562550
+    },
+    {
+      "id": "prism-glass",
+      "name": "Prism Glass",
+      "scene": "vgpu",
+      "look": {
+        "theme": "halloween",
+        "intensity": 1,
+        "motion": 1,
+        "density": 1,
+        "halloween": 1
+      },
+      "intro": "fade",
+      "updatedAt": 0,
+      "thumbAt": 1793072597562
+    },
+    {
+      "id": "folded-surface",
+      "name": "Folded Surface",
+      "scene": "webgpu",
+      "look": {
+        "theme": "halloween",
+        "intensity": 1,
+        "motion": 1,
+        "density": 1,
+        "halloween": 1
+      },
+      "intro": "fade",
+      "updatedAt": 0
+    },
+    {
+      "id": "ribbons",
+      "name": "Ribbons",
+      "scene": "ribbons",
+      "look": {
+        "theme": "halloween",
+        "intensity": 1,
+        "motion": 1,
+        "density": 1,
+        "halloween": 1
+      },
+      "intro": "fade",
+      "updatedAt": 0,
+      "thumbAt": 1793072660807
+    },
+    {
+      "id": "architecture",
+      "name": "Architecture",
+      "scene": "architecture",
+      "look": {
+        "theme": "halloween",
+        "intensity": 1,
+        "motion": 1,
+        "density": 1,
+        "halloween": 1
+      },
+      "intro": "fade",
+      "updatedAt": 0,
+      "thumbAt": 1793072665810
+    },
+    {
+      "id": "line-waves",
+      "name": "Line Waves",
+      "scene": "lines",
+      "look": {
+        "theme": "halloween",
+        "intensity": 1,
+        "motion": 1,
+        "density": 1,
+        "halloween": 1
+      },
+      "intro": "fade",
+      "updatedAt": 0,
+      "thumbAt": 1793081283001
+    },
+    {
+      "id": "dither-knot",
+      "name": "Dither Knot",
+      "scene": "dither",
+      "look": {
+        "theme": "halloween",
+        "intensity": 1,
+        "motion": 1,
+        "density": 1,
+        "halloween": 1
+      },
+      "intro": "fade",
+      "updatedAt": 0,
+      "thumbAt": 1793081288906
+    }
+  ]
+}
