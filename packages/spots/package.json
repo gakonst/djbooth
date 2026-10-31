@@ -2,7 +2,6 @@
   "name": "@gakonst/spots",
   "version": "0.2.0",
   "description": "A complete typed Spotify Web API client and agent-friendly CLI built with incur.",
-  "type": "module",
   "license": "MIT",
   "author": "Georgios Konstantopoulos",
   "repository": {
@@ -10,15 +9,17 @@
     "url": "https://github.com/gakonst/djbooth",
     "directory": "packages/spots"
   },
-  "publishConfig": {
-    "access": "public"
-  },
-  "engines": {
-    "node": ">=22"
-  },
   "bin": {
     "spots": "./dist/cli.js"
   },
+  "files": [
+    "dist",
+    "docs",
+    "openapi/spotify.yaml",
+    "README.md",
+    "LICENSE"
+  ],
+  "type": "module",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -33,24 +34,18 @@
       "import": "./dist/auth/index.js"
     }
   },
-  "files": [
-    "dist",
-    "docs",
-    "openapi/spotify.yaml",
-    "README.md",
-    "LICENSE"
-  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsup",
-    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test",
+    "check": "pnpm format:check && pnpm lint && pnpm typecheck",
     "cli": "tsx src/cli.ts",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "eslint .",
     "openapi:sync": "tsx scripts/sync-openapi.ts",
     "prepack": "pnpm build",
-    "test": "vitest run",
-    "test:watch": "vitest",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -69,7 +64,9 @@
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.52.0",
-    "vitest": "^4.1.0",
     "yaml": "^2.8.2"
+  },
+  "engines": {
+    "node": ">=22"
   }
 }

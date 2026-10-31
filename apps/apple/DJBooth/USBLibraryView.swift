@@ -43,13 +43,6 @@ struct USBLibraryView: View {
         .accessibilityIdentifier("usb.browser")
     }
     private func chooseFolder() {
-        #if DEBUG && targetEnvironment(simulator)
-        if ProcessInfo.processInfo.arguments.contains("--ui-test-library"),
-           let path = ProcessInfo.processInfo.environment["DJBOOTH_TEST_USB_ROOT"] {
-            selection = URL(fileURLWithPath: path, isDirectory: true)
-            return
-        }
-        #endif
         pickingFolder = true
     }
 }

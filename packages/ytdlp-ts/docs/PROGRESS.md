@@ -1,5 +1,7 @@
 # Progress log
 
+Historical test counts and coverage results below describe validation before the repository test suites were removed; they are not current development requirements.
+
 This is the append-only engineering journal for the port. Dates use Pacific Time.
 
 ## 2026-07-14 — Resilient native YouTube search pagination

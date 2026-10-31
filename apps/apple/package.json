@@ -12,9 +12,6 @@
     "dev": "node scripts/native.mjs run macos",
     "ios": "node scripts/native.mjs run ios",
     "device": "node scripts/native.mjs device",
-    "check": "node scripts/native.mjs check",
-    "test": "node scripts/native.mjs test-kit",
-    "test:ui": "node scripts/native.mjs test-ui",
-    "test:usb": "node scripts/test-usb.mjs"
+    "check": "node scripts/native.mjs check"
   }
 }

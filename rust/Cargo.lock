@@ -754,7 +754,6 @@ dependencies = [
  "serde_json",
  "sha2",
  "symphonia 0.6.0",
- "tempfile",
 ]
 
 [[package]]
@@ -771,7 +770,6 @@ dependencies = [
  "serde",
  "serde_json",
  "syn 2.0.119",
- "tempfile",
  "tokio",
 ]
 
@@ -792,7 +790,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
- "tempfile",
  "tokio",
  "tokio-stream",
  "tracing",
@@ -830,7 +827,6 @@ dependencies = [
  "serde_json",
  "sha2",
  "socket2",
- "tempfile",
  "thiserror 2.0.19",
  "tokio",
  "tokio-stream",

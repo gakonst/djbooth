@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { LiveHardwareMonitor } from "@gakonst/dj-monitor";
 
 import { App } from "./App.js";
+import { isCloudWorkstation } from "./cloud-library.js";
 import { assistantEnabledFromSearch, djBoothViewFromPath } from "../workbench-mode.js";
 import "@gakonst/dj-monitor/styles.css";
 import "./styles.css";
@@ -27,7 +28,13 @@ const queryClient = new QueryClient({
 
 const root = document.getElementById("root");
 if (!root) throw new Error("Missing #root mount point");
-const assistantEnabled = assistantEnabledFromSearch(window.location.search);
+const cloud = isCloudWorkstation();
+if (cloud) document.documentElement.classList.add("cloud-workstation");
+const assistantEnabled =
+  assistantEnabledFromSearch(window.location.search) &&
+  (!cloud ||
+    (window.matchMedia("(min-width: 901px)").matches &&
+      new URLSearchParams(window.location.search).get("assistant") === "1"));
 const boothView = djBoothViewFromPath(window.location.pathname) === "booth";
 
 createRoot(root).render(

@@ -1,10 +1,11 @@
+import { createDanceMotion, type MusicDance } from "./music-dance.js";
 import * as THREE from "three/webgpu";
 import { positionWorld, screenCoordinate, texture, uniform, uv, vec2, wgslFn } from "three/tsl";
 
 // One continuous surface. All three decks enter the same deformation and ink field.
 const sharedPosition = wgslFn(`
 fn sharedPosition(st: vec2f, a0: vec4f, a1: vec4f, a2: vec4f,
-                  m0: vec4f, m1: vec4f, m2: vec4f, clock: f32, aspect: f32) -> vec3f {
+                  m0: vec4f, m1: vec4f, m2: vec4f, clock: f32, aspect: f32, dancePose: vec4f) -> vec3f {
   let theta = st.x * 6.283185;
   let u = st.y;
   let levels = clamp(sqrt(max(vec3f(a0.x,a1.x,a2.x),vec3f(0.0))) * 1.6, vec3f(0.0),vec3f(1.0));
@@ -29,6 +30,10 @@ fn sharedPosition(st: vec2f, a0: vec4f, a1: vec4f, a2: vec4f,
   // The opening drifts as part of the landscape, rather than orbiting each deck.
   p.x += sin(clock * 0.08) * u * 0.35;
   p.y += cos(theta + clock * 0.06) * u * 0.20;
+  let envelope = sin(u * 3.14159);
+  p.x += dancePose.x * sin(theta * 2.0) * envelope * 0.12;
+  p.y += dancePose.y * cos(theta * 3.0) * envelope * 0.10;
+  p.z += dancePose.z * sin(theta * 2.0) * envelope * 0.10;
   return p;
 }`);
 
@@ -54,16 +59,41 @@ fn sharedInk(st: vec2f, world: vec3f, pixel: vec2f,
   let line = abs(sin(phase * 3.14159));
   let edge = smoothstep(0.025,0.025 + fwidth(phase) * 3.5,line);
   let colorMask = smoothstep(-0.25,0.25,sin(phase * 0.78 + theta * 2.0 - clock * 0.09));
-  let ink = mix(vec3f(0.80,0.82,0.78),hue,colorMask * level);
+  let autumn = mix(vec3f(0.86,0.32,0.08),vec3f(0.36,0.16,0.62),colorMask);
+  let ink = mix(autumn,hue,0.35 * level);
+  let filigree = pow(0.5 + 0.5 * sin(theta * 24.0 + sin(st.y * 32.0) * 1.4),12.0);
   let normal = normalize(cross(dpdx(world),dpdy(world)));
   let light = 0.28 + 0.72 * abs(dot(normal,normalize(vec3f(-0.5,0.7,1.0))));
   let grain = fract(dot(floor(pixel),vec2f(0.75487766,0.56984029)));
   let shade = floor((light + grain * 0.065) * 10.0) / 10.0;
   let brightness = (0.04 + level * (0.46 + pulse * 0.32)) * (0.45 + shade * 0.55);
-  return ink * brightness * mix(0.06,1.0,edge);
+  return ink * brightness * mix(0.12,1.0,edge) + vec3f(0.48,0.70,0.40) * filigree * brightness * 0.12;
 }`);
 
 export async function createWebGPUBooth(host: HTMLCanvasElement) {
+  const reduced = matchMedia("(prefers-reduced-motion: reduce)");
+  const danceMotion = createDanceMotion();
+  let suppliedDance: MusicDance | undefined;
+  let danceAmount = 1;
+  let dancePrevious: number | undefined;
+  let danceLeader = 0;
+  const readDance = (time: number, energy: Float32Array, motion: Float32Array) => {
+    for (let lane = 0; lane < 3; lane++)
+      if ((energy[lane * 4] ?? 0) > (energy[danceLeader * 4] ?? 0) * 1.25 + 0.01)
+        danceLeader = lane;
+    const e = danceLeader * 4;
+    const dt = dancePrevious === undefined ? 0 : time - dancePrevious;
+    dancePrevious = time;
+    const fallback = danceMotion.update(
+      motion[e + 3] ?? 0,
+      energy[e] ?? 0,
+      energy[e + 1] ?? 0,
+      energy[e + 2] ?? 0,
+      energy[e + 3] ?? 0,
+      dt,
+    );
+    return suppliedDance ?? fallback;
+  };
   const renderer = new THREE.WebGPURenderer({ alpha: true, antialias: true });
   const canvas = renderer.domElement;
   canvas.className = "booth-visuals webgpu-booth";
@@ -82,6 +112,7 @@ export async function createWebGPUBooth(host: HTMLCanvasElement) {
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(48, 1, 0.1, 40);
   camera.position.z = 5.5;
+  const dancePose = uniform(new THREE.Vector4());
   const clock = uniform(0),
     aspect = uniform(1);
   const waveformData = new Uint8Array(256 * 3 * 4);
@@ -107,7 +138,7 @@ export async function createWebGPUBooth(host: HTMLCanvasElement) {
     m1: lanes[1]!.controls,
     m2: lanes[2]!.controls,
   };
-  material.positionNode = sharedPosition({ ...input, aspect });
+  material.positionNode = sharedPosition({ ...input, aspect, dancePose });
   // The native WGSL function returns vec3f; the TS signature cannot infer source text.
   material.colorNode = sharedInk({
     ...input,
@@ -181,8 +212,22 @@ export async function createWebGPUBooth(host: HTMLCanvasElement) {
     throw error;
   }
   return {
+    setLook(value: { motion: number }) {
+      danceAmount = Number.isFinite(value.motion) ? Math.max(0, Math.min(2, value.motion)) : 1;
+    },
+    setDance(value: MusicDance) {
+      suppliedDance = value;
+    },
     dispose,
     draw(time: number, rgba: Uint8Array, energy: Float32Array, motion: Float32Array) {
+      const dance = readDance(time, energy, motion);
+      const amount = reduced.matches ? 0 : danceAmount;
+      dancePose.value.set(
+        dance.sway * amount,
+        dance.bounce * amount,
+        dance.twist * amount,
+        dance.tap * amount,
+      );
       clock.value = time;
       waveformData.set(rgba);
       waveform.needsUpdate = true;

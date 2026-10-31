@@ -122,7 +122,7 @@ Run from the repository root with `pnpm native:dev` or `pnpm native:ios`. Device
 simulator selection, and launch options are documented by `pnpm native:device --help`.
 Use `pnpm native:device --optimized` for an optimized development install; this enables Swift `-O`
 while retaining the existing Debug provisioning and offline-download behavior. The same flag is
-available for native builds, runs, and UI tests.
+available for native builds and runs.
 The checked-in `DJBooth.xcodeproj` contains macOS and iOS schemes. Xcode 26 or later is required
 to build; deployment targets are macOS 14 and iOS 17. Mac and physical-device builds require a local
 Apple Development signing certificate; stable Mac signing keeps saved credentials accessible
@@ -146,20 +146,6 @@ showing the library, including the player's raster and compact row drawing data.
 and album indexes need only the player's waveform. Offscreen waveforms load afterward and reuse
 the already-decoded tracks without replacing the playing item or resetting its position.
 
-To measure five process launches against a simulator's existing library and saved player, run:
-
-```sh
-TEST_RUNNER_DJBOOTH_STARTUP_RUN=$(uuidgen) pnpm native:test:ui --optimized --simulator <uuid> \
-  --only-testing DJBoothUITests-iOS/DJBoothUITests/testCachedStartupPerformance
-```
-
-The test disables cloud/workstation sync, preserves the cached library, and verifies restoration of
-the last track paused with its waveform available. Debug-only phase timings are written to the app container's
-`tmp/DJBoothPerformance/<run UUID>.jsonl`; compare `app_begin` to `library_rendered` per process.
-This interval starts in `App.init`, excluding OS work before the app enters Swift.
-`first_render_waveforms_ready` must precede `library_rendered`; background completion is recorded
-separately as `library_analysis_ready`.
-
 The Mac uses the existing loopback API for library reads and guarded mutations. Acquisition and
 account authorization run through the public djbooth CLI. Debug development builds locate the
 repository; distribution builds require an installed `djbooth` engine. Local imports use provider accounts on
@@ -167,52 +153,13 @@ the Mac. Cloud imports use provider credentials configured as Worker secrets. Th
 retry, and offline-download actions. It receives metadata, collections, and acquired audio through the
 Cloudflare service in `apps/cloud`; it does not expose or connect to an unauthenticated LAN server.
 
-`pnpm native:test` tests persistence, conflict handling, retries, transport and media chunks.
-`pnpm native:check` compiles both platforms. `pnpm native:test:ui` runs native simulator tests.
-`pnpm native:test:usb --simulator <uuid>` creates an isolated fake Rekordbox `master.db`,
-exports simulated USB folders through `pnpm djbooth usb`, then renames/reorders a playlist
-through `pnpm djbooth playlist` and syncs again. The iOS tests cover metadata, playlist order,
-automatic refresh/reconnect, missing/corrupt libraries, and OneLibrary-only errors.
-A second synthetic source contains playable MP3/FLAC tones and deterministic ANLZ; it tests
-real playback, seeking, notes/colors, relaunch, and cached playback after disconnect.
-Generating this fixture requires `ffmpeg` on PATH.
-The round-trip test also appends a simulated CDJ history, syncs twice through the CLI, and
-checks the dated playlist, repeated tracks, and exactly-once play counts in the fake database.
-SHA-256 checks verify that browsing leaves every source and USB file unchanged. The simulator replaces
-only folder selection; real folder reads and parsing are used. Hardware and Files-provider
-permissions still require a connected-device check. `--prepare-only` retains the fixtures
-without launching a simulator. All fixture paths are printed; no real library is opened.
-On a simulator with downloaded library audio, run
-`TEST_RUNNER_DJBOOTH_REAL_PLAYBACK_TEST=1 pnpm native:test:ui` to also verify cached playback,
-seeking, and restoration after relaunch. The audio check is skipped in ordinary fixture runs.
+`pnpm native:check` compiles both platforms.
 `--demo` is an explicitly labelled Debug-only sample library, isolated in memory with no network
 or acquisition activity. Release builds ignore it. Production data is never replaced by fixtures.
 
 This is the native library/listening surface. The existing web workstation retains its advanced
 two-deck mixing, cue editor, stems controls, USB management, and assistant while those interfaces
 are migrated. The shared acquisition, analysis, and Rekordbox engine remains authoritative.
-
-
-## Local Connect integration test
-
-Start the local test Worker in one terminal:
-
-```sh
-pnpm --filter @gakonst/djbooth-cloud test:mobile-server
-```
-
-Then run on a dedicated empty simulator (pass its UUID):
-
-```sh
-pnpm --filter @gakonst/djbooth-apple test:ui --simulator <uuid> --only-testing DJBoothUITests-iOS/ConnectUITests
-```
-
-The test uses the real browser Connect SDK, system authentication sheet, one-time
-code exchange, Keychain, native chat, and Worker/D1 account isolation. Only the
-Nanocodex approval and agent boundary is simulated, with Alice/Bob fixture accounts.
-It does not connect real Spotify/SoundCloud accounts, download music, or spend money.
-The test skips when its fixture is absent; use an empty dedicated simulator to avoid
-mixing previous sessions. Fixture servers listen only on loopback ports 8791/8792.
 
 
 ## iPhone DJ Link development
@@ -354,9 +301,7 @@ session remains. No deliberate stall runs on physical devices or release builds.
 
 DJ Link protocol logic remains in Rust. Swift forwards calls and iOS lifecycle/
 MetricKit notifications. The generated 55-method/11-function inventory is checked at
-runtime; binding tests compare native results, errors, subscriptions and transmitted
-bytes, and shared-server tests cover browse/Back/track changes. Physical deck behavior
-still requires a recorded hardware test; the binding inventory alone cannot prove it.
+runtime. Physical deck behavior still requires verification on hardware.
 
 ### Agent app controls over reverse MCP
 
@@ -378,8 +323,7 @@ Execution requires the app awake and connected. Audio permission and account
 sign-in still use normal system UI; cloud download jobs run independently.
 
 The signed `phone-tools.json` approval catalog must match the MCP adapter exactly
-(provider, remote name, schema, parallel flag and timeout). Cloud contract tests
-compare the real SDK attachment and consent digests. Catalog changes require new
+(provider, remote name, schema, parallel flag and timeout). Catalog changes require new
 Connect consent. The paired-device DEBUG diagnostic operation `phone.mcp` can
 exercise the same JSON-RPC handler using the existing `link --arguments-file`
 transport; it is not an agent authentication bypass in release builds.

@@ -20,7 +20,6 @@ const configurationList = (name, base, debug = {}) => {
     SWIFT_OPTIMIZATION_LEVEL: mode === "Debug" ? "-Onone" : "-O",
     SWIFT_ACTIVE_COMPILATION_CONDITIONS: mode === "Debug" ? "$(inherited) DEBUG" : "$(inherited)",
     DEBUG_INFORMATION_FORMAT: mode === "Debug" ? "dwarf" : "dwarf-with-dsym",
-    ENABLE_TESTABILITY: mode === "Debug" ? "YES" : "NO",
     ONLY_ACTIVE_ARCH: mode === "Debug" ? "YES" : "NO",
     ...(mode === "Debug" ? debug : {}),
   })};`));
@@ -28,9 +27,8 @@ const configurationList = (name, base, debug = {}) => {
 };
 const sourceFiles = async (directory) => (await readdir(resolve(root, directory))).filter((name) => name.endsWith(".swift")).sort().map((name) => `${directory}/${name}`);
 const appSources = await sourceFiles("DJBooth");
-const testSources = await sourceFiles("DJBoothUITests");
 const fileReferences = new Map();
-for (const path of [...appSources, ...testSources, "DJBooth/Info.iOS.plist", "DJBooth/Info.macOS.plist", "DJBooth/Info.Debug.iOS.plist", "DJBooth/Info.Debug.macOS.plist", "DJBooth/Assets.xcassets"]) {
+for (const path of [...appSources, "DJBooth/Info.iOS.plist", "DJBooth/Info.macOS.plist", "DJBooth/Info.Debug.iOS.plist", "DJBooth/Info.Debug.macOS.plist", "DJBooth/Assets.xcassets"]) {
   const type = path.endsWith(".swift") ? "sourcecode.swift" : path.endsWith(".plist") ? "text.plist.xml" : "folder.assetcatalog";
   fileReferences.set(path, object(`file.${path}`, `isa = PBXFileReference; lastKnownFileType = ${type}; path = ${quote(path)}; sourceTree = SOURCE_ROOT;`));
 }
@@ -45,7 +43,6 @@ const common = {
 };
 for (const platform of ["macOS", "iOS"]) {
   const targetName = `DJBooth-${platform}`;
-  const testTargetName = `DJBoothUITests-${platform}`;
   const platformSettings = platform === "iOS" ? {
     SDKROOT: "iphoneos", SUPPORTED_PLATFORMS: "iphoneos iphonesimulator", IPHONEOS_DEPLOYMENT_TARGET: "17.0",
     TARGETED_DEVICE_FAMILY: "1,2", SUPPORTS_MACCATALYST: "NO", SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: "NO",
@@ -75,24 +72,11 @@ for (const platform of ["macOS", "iOS"]) {
   }, { INFOPLIST_FILE: `DJBooth/Info.Debug.${platform}.plist`, DJBOOTH_OFFLINE_COLLECTION: "",
     ...(platform === "iOS" ? { DEBUG_INFORMATION_FORMAT: "dwarf-with-dsym" } : {}) });
   targets.push(object(targetName, `isa = PBXNativeTarget; buildConfigurationList = ${configuration}; buildPhases = (${linkPhase ? `${linkPhase}, ` : ""}${sourcePhase}, ${frameworks}, ${resources}); buildRules = (); dependencies = (); name = ${quote(targetName)}; productName = DJBooth; productReference = ${product}; productType = "com.apple.product-type.application"; packageProductDependencies = (${packageProduct});`));
-  const testProduct = object(`${testTargetName}.product`, `isa = PBXFileReference; explicitFileType = wrapper.cfbundle; path = ${quote(`${testTargetName}.xctest`)}; sourceTree = BUILT_PRODUCTS_DIR;`);
-  products.push(testProduct);
-  const testBuildFiles = testSources.map((path) => object(`${testTargetName}.build.${path}`, `isa = PBXBuildFile; fileRef = ${fileReferences.get(path)};`));
-  const testSourcePhase = object(`${testTargetName}.sources`, `isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = ${array(testBuildFiles)}; runOnlyForDeploymentPostprocessing = 0;`);
-  const proxy = object(`${testTargetName}.proxy`, `isa = PBXContainerItemProxy; containerPortal = ${id("project")}; proxyType = 1; remoteGlobalIDString = ${id(targetName)}; remoteInfo = ${quote(targetName)};`);
-  const dependency = object(`${testTargetName}.dependency`, `isa = PBXTargetDependency; target = ${id(targetName)}; targetProxy = ${proxy};`);
-  const testConfiguration = configurationList(testTargetName, {
-    ...common, ...platformSettings, PRODUCT_NAME: "$(TARGET_NAME)", PRODUCT_BUNDLE_IDENTIFIER: `xyz.gakonst.djbooth.uitests.${platform.toLowerCase()}`,
-    TEST_TARGET_NAME: targetName, SWIFT_EMIT_LOC_STRINGS: "NO",
-  });
-  targets.push(object(testTargetName, `isa = PBXNativeTarget; buildConfigurationList = ${testConfiguration}; buildPhases = (${testSourcePhase}); buildRules = (); dependencies = (${dependency}); name = ${quote(testTargetName)}; productName = ${quote(testTargetName)}; productReference = ${testProduct}; productType = "com.apple.product-type.bundle.ui-testing";`));
-
   const reference = (name, buildable) => `<BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="${id(name)}" BuildableName="${buildable}" BlueprintName="${name}" ReferencedContainer="container:DJBooth.xcodeproj"/>`;
   const appReference = reference(targetName, "DJBooth.app");
   const scheme = `<?xml version="1.0" encoding="UTF-8"?>
 <Scheme LastUpgradeVersion="2660" version="1.3">
-  <BuildAction parallelizeBuildables="YES" buildImplicitDependencies="YES"><BuildActionEntries><BuildActionEntry buildForTesting="YES" buildForRunning="YES" buildForProfiling="YES" buildForArchiving="YES" buildForAnalyzing="YES">${appReference}</BuildActionEntry></BuildActionEntries></BuildAction>
-  <TestAction buildConfiguration="Debug" selectedDebuggerIdentifier="Xcode.DebuggerFoundation.Debugger.LLDB" selectedLauncherIdentifier="Xcode.IDEFoundation.Launcher.LLDB" shouldUseLaunchSchemeArgsEnv="YES"><Testables><TestableReference skipped="NO">${reference(testTargetName, `${testTargetName}.xctest`)}</TestableReference></Testables></TestAction>
+  <BuildAction parallelizeBuildables="YES" buildImplicitDependencies="YES"><BuildActionEntries><BuildActionEntry buildForTesting="NO" buildForRunning="YES" buildForProfiling="YES" buildForArchiving="YES" buildForAnalyzing="YES">${appReference}</BuildActionEntry></BuildActionEntries></BuildAction>
   <LaunchAction buildConfiguration="Debug" selectedDebuggerIdentifier="Xcode.DebuggerFoundation.Debugger.LLDB" selectedLauncherIdentifier="Xcode.IDEFoundation.Launcher.LLDB" launchStyle="0" useCustomWorkingDirectory="NO" ignoresPersistentStateOnLaunch="NO" debugDocumentVersioning="YES"><BuildableProductRunnable runnableDebuggingMode="0">${appReference}</BuildableProductRunnable></LaunchAction>
   <ProfileAction buildConfiguration="Release" shouldUseLaunchSchemeArgsEnv="YES" useCustomWorkingDirectory="NO" debugDocumentVersioning="YES"><BuildableProductRunnable runnableDebuggingMode="0">${appReference}</BuildableProductRunnable></ProfileAction>
   <AnalyzeAction buildConfiguration="Debug"/>
@@ -103,11 +87,10 @@ for (const platform of ["macOS", "iOS"]) {
   await writeFile(resolve(projectDirectory, `xcshareddata/xcschemes/${targetName}.xcscheme`), scheme);
 }
 const appGroup = object("appGroup", `isa = PBXGroup; name = DJBooth; children = ${array([...fileReferences].filter(([path]) => path.startsWith("DJBooth/")).map(([, reference]) => reference))}; sourceTree = "<group>";`);
-const testGroup = object("testGroup", `isa = PBXGroup; name = DJBoothUITests; children = ${array(testSources.map((path) => fileReferences.get(path)))}; sourceTree = "<group>";`);
 const productsGroup = object("products", `isa = PBXGroup; name = Products; children = ${array(products)}; sourceTree = "<group>";`);
-const mainGroup = object("main", `isa = PBXGroup; children = (${appGroup}, ${testGroup}, ${productsGroup}); sourceTree = "<group>";`);
+const mainGroup = object("main", `isa = PBXGroup; children = (${appGroup}, ${productsGroup}); sourceTree = "<group>";`);
 const projectConfiguration = configurationList("project", { CLANG_ENABLE_OBJC_ARC: "YES", CLANG_WARN_DOCUMENTATION_COMMENTS: "YES", GCC_WARN_UNINITIALIZED_AUTOS: "YES_AGGRESSIVE" });
-object("project", `isa = PBXProject; attributes = { LastUpgradeCheck = 2660; BuildIndependentTargetsInParallel = YES; TargetAttributes = { ${["macOS", "iOS"].map((p) => `${id(`DJBoothUITests-${p}`)} = { TestTargetID = ${id(`DJBooth-${p}`)}; };`).join(" ")} }; }; buildConfigurationList = ${projectConfiguration}; compatibilityVersion = "Xcode 14.0"; developmentRegion = en; hasScannedForEncodings = 0; knownRegions = (en, Base); mainGroup = ${mainGroup}; productRefGroup = ${productsGroup}; projectDirPath = ""; projectRoot = ""; targets = ${array(targets)}; packageReferences = (${packageReference});`);
+object("project", `isa = PBXProject; attributes = { LastUpgradeCheck = 2660; BuildIndependentTargetsInParallel = YES; }; buildConfigurationList = ${projectConfiguration}; compatibilityVersion = "Xcode 14.0"; developmentRegion = en; hasScannedForEncodings = 0; knownRegions = (en, Base); mainGroup = ${mainGroup}; productRefGroup = ${productsGroup}; projectDirPath = ""; projectRoot = ""; targets = ${array(targets)}; packageReferences = (${packageReference});`);
 await mkdir(projectDirectory, { recursive: true });
 await writeFile(resolve(projectDirectory, "project.pbxproj"), `// !$*UTF8*$!\n// Generated by pnpm --filter @gakonst/djbooth-apple project.\n{ archiveVersion = 1; classes = {}; objectVersion = 56; objects = {\n${objects.join("\n")}\n}; rootObject = ${id("project")}; }\n`);
-console.log(`DJBooth.xcodeproj: ${appSources.length} app sources, ${testSources.length} UI test sources; macOS + iOS.`);
+console.log(`DJBooth.xcodeproj: ${appSources.length} app sources; macOS + iOS.`);

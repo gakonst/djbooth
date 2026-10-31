@@ -1,5 +1,7 @@
 # Progress log
 
+Historical test counts and coverage results below describe validation before the repository test suites were removed; they are not current development requirements.
+
 ## 2026-07-10
 
 - Created private repository `gakonst/spots` and initialized `main`.

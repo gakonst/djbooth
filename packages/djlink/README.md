@@ -175,8 +175,7 @@ renders, six nonzero cursors, zero missing/mismatched headers, and no TCP sequen
 trace contains accepted `0x1500` edits interleaved with artwork, metadata, and ANLZ requests.
 Playlist and folder `MENU_ITEM` argument 10 carries the row's master `Seq`; emitting zero makes a
 CDJ restore the correct child cursor but highlight the first parent row after Back.
-Golden payloads, capture hashes, and the wire contract live in
-`native/crates/djtools-link/tests/fixtures/` and `native/crates/djtools-link/PROTOCOL.md`.
+The wire contract lives in `rust/crates/djtools-link/PROTOCOL.md`.
 
 ### Booth state API
 

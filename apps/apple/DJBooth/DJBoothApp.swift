@@ -47,11 +47,6 @@ import DJBoothKit
             .onContinueUserActivity(NSUserActivityTypeBrowsingWeb) { activity in
                 if let url = activity.webpageURL { receive(url) }
             }
-            #if DEBUG
-            .overlay(alignment: .top) {
-                if PlaybackRaceProbeView.enabled, let model { PlaybackRaceProbeView(model: model) }
-            }
-            #endif
             .tint(BoothStyle.accent)
             .preferredColorScheme(.dark)
             #if os(macOS)

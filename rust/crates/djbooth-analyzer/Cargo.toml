@@ -12,7 +12,6 @@ include = [
   "Cargo.toml",
   "Cargo.lock",
   "src/**",
-  "tests/**",
   "ANLZ_COMPATIBILITY.md",
   "THIRD_PARTY_LICENSES.md",
 ]
@@ -25,6 +24,3 @@ serde_json = "1"
 sha2 = "0.10"
 rustfft = "6"
 symphonia = { version = "0.6", default-features = false, features = ["all-codecs", "all-formats", "all-meta", "opt-simd"] }
-
-[dev-dependencies]
-tempfile = "3"

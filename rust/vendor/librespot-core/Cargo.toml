@@ -54,10 +54,6 @@ rustls-tls-webpki-roots = [
 name = "librespot_core"
 path = "src/lib.rs"
 
-[[test]]
-name = "connect"
-path = "tests/connect.rs"
-
 [dependencies.aes]
 version = "0.8"
 
@@ -256,10 +252,6 @@ version = "2"
 version = "1"
 features = ["v4"]
 default-features = false
-
-[dev-dependencies.tokio]
-version = "1"
-features = ["macros"]
 
 [build-dependencies.rand]
 version = "0.9"

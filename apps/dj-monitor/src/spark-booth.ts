@@ -1,9 +1,33 @@
+import { createDanceMotion, type MusicDance } from "./music-dance.js";
 import { createArchitectureBooth } from "./architecture-booth.js";
 import { waveformAccent } from "./waveform-signal.js";
 import * as THREE from "three";
 import { PackedSplats, SparkRenderer, SplatMesh } from "@sparkjsdev/spark";
 
 export async function createSparkBooth(host: HTMLCanvasElement) {
+  const reduced = matchMedia("(prefers-reduced-motion: reduce)");
+  const danceMotion = createDanceMotion();
+  let suppliedDance: MusicDance | undefined;
+  let danceAmount = 1;
+  let dancePrevious: number | undefined;
+  let danceLeader = 0;
+  const readDance = (time: number, energy: Float32Array, motion: Float32Array) => {
+    for (let lane = 0; lane < 3; lane++)
+      if ((energy[lane * 4] ?? 0) > (energy[danceLeader * 4] ?? 0) * 1.25 + 0.01)
+        danceLeader = lane;
+    const e = danceLeader * 4;
+    const dt = dancePrevious === undefined ? 0 : time - dancePrevious;
+    dancePrevious = time;
+    const fallback = danceMotion.update(
+      motion[e + 3] ?? 0,
+      energy[e] ?? 0,
+      energy[e + 1] ?? 0,
+      energy[e + 2] ?? 0,
+      energy[e + 3] ?? 0,
+      dt,
+    );
+    return suppliedDance ?? fallback;
+  };
   const renderer = new THREE.WebGLRenderer({ antialias: false, alpha: true });
   renderer.domElement.className = "booth-visuals spark-booth";
   renderer.domElement.setAttribute("aria-hidden", "true");
@@ -72,6 +96,14 @@ export async function createSparkBooth(host: HTMLCanvasElement) {
   let lastWidth = 0,
     lastHeight = 0;
   return {
+    setLook(value: { motion: number }) {
+      danceAmount = Number.isFinite(value.motion) ? Math.max(0, Math.min(2, value.motion)) : 1;
+      architecture?.setLook(value);
+    },
+    setDance(value: MusicDance) {
+      suppliedDance = value;
+      architecture?.setDance(value);
+    },
     dispose,
     draw(
       time: number,
@@ -108,6 +140,8 @@ export async function createSparkBooth(host: HTMLCanvasElement) {
         renderer.render(scene, camera);
         return;
       }
+      const dance = readDance(time, energy, motion);
+      const groove = reduced.matches ? 0 : danceAmount;
       const span = Math.sqrt(camera.aspect);
       for (let lane = 0; lane < 3; lane++) {
         const { packed, mesh } = lanes[lane]!;
@@ -166,7 +200,10 @@ export async function createSparkBooth(host: HTMLCanvasElement) {
             x += Math.sin(u * 40 + phase) * amplitude * 0.07;
             y += Math.cos(u * 28 + phase) * amplitude * 0.07;
           }
-          const breath = 1 + pulse * 0.055;
+          x += Math.sin(u * Math.PI) * dance.sway * groove * 0.08;
+          y += Math.sin(u * Math.PI) * dance.bounce * groove * 0.1;
+          z += Math.sin(u * Math.PI * 2) * dance.twist * groove * 0.07;
+          const breath = 1 + pulse * 0.055 * groove;
           out.set(
             x * span * enter * breath + origins[lane * 2]! * halfWidth * (1 - enter),
             y * enter * breath + origins[lane * 2 + 1]! * halfHeight * (1 - enter),

@@ -45,12 +45,12 @@ const LOW = 0,
   MID = 1,
   HIGH = 2;
 /** A band hits when its onset is at least this share of the song's typical strong onset. */
-const THRESHOLD = [0.42, 0.45, 0.5];
+const THRESHOLD = [0.32, 0.34, 0.36];
 
 function beatsOf(waveform: TrackWaveform, bpm: number): Fret[] {
   const grid = waveform.beatGrid ?? [];
-  if (grid.length >= 16) return grid.map((b) => ({ time: b.timeSeconds, downbeat: b.beat === 1 }));
-  const beat = 60 / (bpm > 0 ? bpm : 120);
+  if (grid.length >= 2) return grid.map((b) => ({ time: b.timeSeconds, downbeat: b.beat === 1 }));
+  const beat = 60 / (Number.isFinite(bpm) && bpm > 0 ? bpm : 120);
   return Array.from({ length: Math.ceil(waveform.durationSeconds / beat) }, (_, i) => ({
     time: i * beat,
     downbeat: i % 4 === 0,
@@ -87,7 +87,8 @@ function bandEnergy(waveform: TrackWaveform, rhythm?: TrackRhythm | null) {
     const peak = waveform.peaks[i] ?? 0;
     const color = waveform.colors?.[i];
     const total = color ? color[0] + color[1] + color[2] : 0;
-    for (let b = 0; b < BANDS; b++) bands[b]![i] = total > 0 ? (peak * color![b]!) / total : peak / BANDS;
+    for (let b = 0; b < BANDS; b++)
+      bands[b]![i] = total > 0 ? (peak * color![b]!) / total : peak / BANDS;
   }
   return { bands, rate: n / waveform.durationSeconds };
 }
@@ -117,18 +118,45 @@ export function songOf(waveform: TrackWaveform, bpm: number, rhythm?: TrackRhyth
   return { ...song, sections };
 }
 
-const charts = new Map<string, Chart>();
+const charts: {
+  trackId: string;
+  waveform: TrackWaveform;
+  grid: TrackWaveform["beatGrid"];
+  bpm: number;
+  rhythm: TrackRhythm | null | undefined;
+  chart: Chart;
+}[] = [];
 
 /** One chart per track and analysis, shared by the scene and the click track. */
-export function chartFor(trackId: string, waveform: TrackWaveform, bpm: number, rhythm?: TrackRhythm | null) {
-  const key = `${trackId}:${rhythm?.bands ? "detail" : "color"}:${rhythm?.phrases ? "phrases" : ""}`;
-  let chart = charts.get(key);
-  if (!chart) {
-    chart = buildChart(waveform, bpm, rhythm);
-    charts.set(key, chart);
-    if (charts.size > 24) charts.delete(charts.keys().next().value!);
+export function chartFor(
+  trackId: string,
+  waveform: TrackWaveform,
+  bpm: number,
+  rhythm?: TrackRhythm | null,
+) {
+  const tempo = Number.isFinite(bpm) && bpm > 0 ? bpm : 120;
+  // Keep separate analyses of the same track cached when it is loaded on both decks.
+  let cached = charts.find(
+    (entry) =>
+      entry.trackId === trackId &&
+      entry.waveform === waveform &&
+      entry.grid === waveform.beatGrid &&
+      entry.bpm === tempo &&
+      entry.rhythm === rhythm,
+  );
+  if (!cached) {
+    cached = {
+      trackId,
+      waveform,
+      grid: waveform.beatGrid,
+      bpm: tempo,
+      rhythm,
+      chart: buildChart(waveform, tempo, rhythm),
+    };
+    charts.push(cached);
+    if (charts.length > 24) charts.shift();
   }
-  return chart;
+  return cached.chart;
 }
 
 type Slot = {
@@ -148,21 +176,29 @@ type Slot = {
 /**
  * Chart a whole song ahead of time from its Rekordbox analysis, like a rhythm-game chart:
  * the beat grid is split into sixteenths, each slot is checked for a fresh hit in the lows,
- * mids and highs, and each hit is a note in the lane for that sound. The chart starts easy
- * (strong beats only) and gets harder through the song, every bar keeps its pulse, and
+ * mids and highs, and each hit is a note in the lane for that sound. Hard mode retains
+ * sixteenth-note runs and simultaneous band hits from the beginning. Every bar keeps its pulse, and
  * every section change is marked: a crash chord on each drop with a roll leading into it.
  */
-export function buildChart(waveform: TrackWaveform, bpm: number, rhythm?: TrackRhythm | null): Chart {
+export function buildChart(
+  waveform: TrackWaveform,
+  bpm: number,
+  rhythm?: TrackRhythm | null,
+): Chart {
   const song = songOf(waveform, bpm, rhythm);
   const frets = beatsOf(waveform, bpm);
   const duration = waveform.durationSeconds;
   const { bands, rate } = bandEnergy(waveform, rhythm);
   const detail = !!rhythm?.bands;
   const n = bands[0]!.length;
+  // Empty analysis and genuine silence are rests, even on the hardest chart.
+  if (!n || !bands.some((band) => band.some((value) => value > 0.008)))
+    return { song, notes: [], frets };
   const at = (t: number) => Math.max(0, Math.min(n - 1, Math.round(t * rate)));
   const max = (band: Float32Array, from: number, to: number) => {
     let value = 0;
-    for (let i = at(from), end = Math.max(at(from) + 1, at(to)); i < end; i++) value = Math.max(value, band[i]!);
+    for (let i = at(from), end = Math.max(at(from) + 1, at(to)); i < end; i++)
+      value = Math.max(value, band[i]!);
     return value;
   };
   const mean = (band: Float32Array, from: number, to: number) => {
@@ -183,7 +219,9 @@ export function buildChart(waveform: TrackWaveform, bpm: number, rhythm?: TrackR
   const slots: Slot[] = [];
   const raw: number[][] = Array.from({ length: BANDS }, () => []);
   frets.forEach((fret, i) => {
-    const step = (frets[i + 1]?.time ?? fret.time + (frets[i - 1] ? fret.time - frets[i - 1]!.time : 0.5)) - fret.time;
+    const step =
+      (frets[i + 1]?.time ?? fret.time + (frets[i - 1] ? fret.time - frets[i - 1]!.time : 0.5)) -
+      fret.time;
     for (let sub = 0; sub < 4; sub++) {
       const time = fret.time + (sub * step) / 4;
       if (time < 0.05 || time > duration - 0.3) continue;
@@ -212,7 +250,8 @@ export function buildChart(waveform: TrackWaveform, bpm: number, rhythm?: TrackR
   });
   // Every band is judged against its own strong hits, so quiet hats still chart.
   const scale = raw.map((values) => percentile(values, 0.9) || 1);
-  for (const slot of slots) for (let b = 0; b < BANDS; b++) slot.onset[b] = slot.onset[b]! / scale[b]!;
+  for (const slot of slots)
+    for (let b = 0; b < BANDS; b++) slot.onset[b] = slot.onset[b]! / scale[b]!;
 
   /** A band hits in a slot when its onset clears the threshold and peaks there, not a neighbour. */
   const hits = (i: number, b: number) => {
@@ -224,18 +263,13 @@ export function buildChart(waveform: TrackWaveform, bpm: number, rhythm?: TrackR
     );
   };
 
-  const beat = 60 / (bpm > 0 ? bpm : 120);
+  // Recorded beat timestamps are authoritative, even when the BPM tag differs.
+  const beat =
+    percentile(
+      frets.slice(1).map((fret, i) => fret.time - frets[i]!.time),
+      0.5,
+    ) || 60 / (Number.isFinite(bpm) && bpm > 0 ? bpm : 120);
   const bar = beat * 4;
-
-  /**
-   * How hard the chart is at a moment: it opens easy, steps up to medium and then hard as
-   * the song goes on, and eases off a step through breakdowns.
-   */
-  const tierAt = (time: number, style: Style) => {
-    const progress = time / duration;
-    const base = progress < 0.22 ? 0 : progress < 0.5 ? 1 : 2;
-    return Math.max(0, base - (style === "break" ? 1 : 0));
-  };
 
   type Candidate = {
     time: number;
@@ -267,7 +301,8 @@ export function buildChart(waveform: TrackWaveform, bpm: number, rhythm?: TrackR
 
   slots.forEach((slot, i) => {
     const weightOf = (b: number) =>
-      (slot.onset[b]! + GRID_WEIGHT[slot.sub]! + (slot.downbeat ? 0.25 : 0)) * STYLE_WEIGHT[slot.style];
+      (slot.onset[b]! + GRID_WEIGHT[slot.sub]! + (slot.downbeat ? 0.25 : 0)) *
+      STYLE_WEIGHT[slot.style];
     const low = hits(i, LOW),
       mid = hits(i, MID),
       high = hits(i, HIGH);
@@ -288,52 +323,82 @@ export function buildChart(waveform: TrackWaveform, bpm: number, rhythm?: TrackR
     // colour waveform's off-beat lows land on a real bass hit less than a quarter of the time.
     else if (low && detail) push(BASS_LANE, "bass", LOW);
     // Mids hitting together with highs read as a snare or clap; mids alone as melody.
-    if (mid && high && slot.sub % 2 === 0 && slot.onset[HIGH]! > 0.4) push(SNARE_LANE, "snare", MID, 0.15);
+    if (mid && high && slot.sub % 2 === 0 && slot.onset[HIGH]! > 0.4)
+      push(SNARE_LANE, "snare", MID, 0.15);
     else if (mid) {
-      const home = MELODY_LANES[Math.min(MELODY_LANES.length - 1, Math.floor(brightRank(slot.bright) * MELODY_LANES.length))]!;
+      const home =
+        MELODY_LANES[
+          Math.min(
+            MELODY_LANES.length - 1,
+            Math.floor(brightRank(slot.bright) * MELODY_LANES.length),
+          )
+        ]!;
       // Follow the melody's brightness a step at a time.
       melodyLane += Math.sign(home - melodyLane);
       push(melodyLane, "melody", MID);
     }
-    if (high && !mid) push(HAT_LANES[hat++ % HAT_LANES.length]!, "hat", HIGH, -0.15);
+    // Strong simultaneous treble/mid attacks form chords instead of discarding the treble.
+    if (high && (!mid || slot.onset[HIGH]! >= 0.9))
+      push(HAT_LANES[hat++ % HAT_LANES.length]!, "hat", HIGH, -0.08);
   });
 
   // Transitions are always charted: every section opens on a big note, entering a drop or
   // chorus lands on a crash chord, and a roll sweeps across the lanes where the analysis
   // marks a fill (or through the bar before a drop when it marks none).
   const nearestFret = (t: number) =>
-    frets.reduce((best, f) => (Math.abs(f.time - t) < Math.abs(best - t) ? f.time : best), Infinity);
+    frets.reduce(
+      (best, f) => (Math.abs(f.time - t) < Math.abs(best - t) ? f.time : best),
+      Infinity,
+    );
   const forced: Candidate[] = [];
   const rolls: [number, number][] = [];
   const force = (time: number, lane: number, sound: Sound, length = 0) =>
     forced.push({ time, lane, length, sound, weight: 5, big: true, sub: 0, strong: true });
-  const roll = (from: number, to: number, tier: number) => {
-    const step = tier === 0 ? beat : beat / 2;
+  const roll = (from: number, to: number) => {
     rolls.push([from - 0.01, to + 0.01]);
     const sweep = [0, 1, 2, 3, 4, 3, 2, 1];
-    for (let k = 0, t = from; t < to - 0.01; k++, t += step)
-      forced.push({ time: t, lane: sweep[k % sweep.length]!, length: 0, sound: "snare", weight: 4, big: false, sub: 0, strong: true });
+    let k = 0;
+    for (const at of slots) {
+      if (at.time < from) continue;
+      if (at.time >= to - 0.01) break;
+      const lane = sweep[k++ % sweep.length]!;
+      // Follow detected attacks in the fill; never paint a roll over a silent beat.
+      if (Math.max(...at.level) < 0.08 || Math.max(...at.onset) < 0.32) continue;
+      forced.push({
+        time: at.time,
+        lane,
+        length: 0,
+        sound: "snare",
+        weight: 4,
+        big: false,
+        sub: at.sub,
+        strong: true,
+      });
+    }
   };
   song.sections.forEach((section, i) => {
     if (i === 0) return;
     const previous = song.sections[i - 1]!;
     const time = nearestFret(section.start);
-    const tier = tierAt(time, section.style);
     const entering = section.style === "drop" && previous.style !== "drop";
-    if (previous.fill !== undefined) roll(nearestFret(Math.max(previous.fill, time - bar * 2)), time, tier);
-    else if (entering) roll(time - bar, time, tier);
-    if (entering) for (const lane of tier === 0 ? [1, 3] : [0, 2, 4]) force(time, lane, "crash");
-    else if (section.style === "break") force(time, 2, "melody", Math.min(section.end - section.start, bar * 2) * 0.9);
-    else force(time, 2, section.style === "drop" ? "crash" : section.style === "build" ? "snare" : "kick");
+    if (previous.fill !== undefined)
+      roll(nearestFret(Math.max(previous.fill, time - bar * 2)), time);
+    else if (entering) roll(time - bar, time);
+    const sounding = slots.find((slot) => Math.abs(slot.time - time) < beat * 0.15);
+    if (!sounding || Math.max(...sounding.level) < 0.08) return;
+    if (entering) for (const lane of [0, 2, 4]) force(time, lane, "crash");
+    else if (section.style === "break")
+      force(time, 2, "melody", Math.min(section.end - section.start, bar * 2) * 0.9);
+    else
+      force(
+        time,
+        2,
+        section.style === "drop" ? "crash" : section.style === "build" ? "snare" : "kick",
+      );
   });
 
-  // Regular hits, grouped by moment, then thinned to the tier's grid, sounds and spacing.
-  // Easy is about a note every two beats, medium one a beat, hard up to one an eighth.
-  const RULES = [
-    { gap: 2, subs: [0], sounds: ["kick", "snare", "melody"], chord: 1 },
-    { gap: 1, subs: [0, 2], sounds: ["kick", "snare", "bass", "melody"], chord: 1 },
-    { gap: 0.5, subs: [0, 2], sounds: ["kick", "snare", "bass", "melody", "hat"], chord: 2 },
-  ];
+  // Every audible sixteenth is eligible from bar one. Up to three distinct lanes may
+  // coincide; breakdowns retain space while still following the same hard chart.
   candidates.sort((a, b) => a.time - b.time);
   section = 0;
   type Group = { time: number; items: Candidate[]; weight: number; gap: number; chord: number };
@@ -342,15 +407,17 @@ export function buildChart(waveform: TrackWaveform, bpm: number, rhythm?: TrackR
     let j = i;
     while (j < candidates.length && candidates[j]!.time - candidates[i]!.time < 0.01) j++;
     const time = candidates[i]!.time;
-    const rules = RULES[tierAt(time, styleAt(time))]!;
-    const items = candidates
-      .slice(i, j)
-      .filter((c) => rules.sounds.includes(c.sound))
-      .filter((c) => rules.subs.includes(c.sub) || (rules === RULES[2] && c.strong && c.sound !== "hat"))
-      .sort((a, b) => b.weight - a.weight);
+    const quiet = styleAt(time) === "break";
+    const items = candidates.slice(i, j).sort((a, b) => b.weight - a.weight);
     i = j;
     if (!items.length || rolls.some(([from, to]) => time > from && time < to)) continue;
-    groups.push({ time, items, weight: items[0]!.weight, gap: rules.gap * beat - 0.01, chord: rules.chord });
+    groups.push({
+      time,
+      items,
+      weight: items[0]!.weight,
+      gap: (quiet ? 0.5 : 0.25) * beat - 0.01,
+      chord: quiet ? 2 : 3,
+    });
   }
 
   // Strongest moments first; each keeps the tier's spacing from everything already taken.
@@ -380,17 +447,19 @@ export function buildChart(waveform: TrackWaveform, bpm: number, rhythm?: TrackR
     }
   }
 
-  // Keep the pulse: wherever there is music and nothing charted for a stretch (two beats
-  // at easy, a beat after that), the beat gets a note in the lane of whichever sound is
+  // Keep the pulse: wherever there is music and nothing charted for a beat,
+  // the beat gets a note in the lane of whichever sound is
   // loudest on it.
-  const onBeat = new Map(slots.filter((s) => s.sub === 0).map((s) => [Math.round(s.time * 1000), s]));
+  const onBeat = new Map(
+    slots.filter((s) => s.sub === 0).map((s) => [Math.round(s.time * 1000), s]),
+  );
   section = 0;
   let beatInBar = 0;
   for (const fret of frets) {
     beatInBar = fret.downbeat ? 0 : beatInBar + 1;
     const slot = onBeat.get(Math.round(fret.time * 1000));
     if (!slot || Math.max(...slot.level) < 0.08) continue;
-    const every = [2, 1, 1][tierAt(fret.time, styleAt(fret.time))]!;
+    const every = 1;
     if (beatInBar % every) continue;
     const at = insert(fret.time - 0.01);
     if ((taken[at] ?? Infinity) < fret.time + every * beat - 0.01) continue;
@@ -398,8 +467,22 @@ export function buildChart(waveform: TrackWaveform, bpm: number, rhythm?: TrackR
     taken.splice(at, 0, fret.time);
     const loudest = slot.onset.indexOf(Math.max(...slot.onset));
     const [lane, sound]: [number, Sound] =
-      loudest === LOW ? [KICK_LANE, "kick"] : loudest === MID ? [melodyLane, "melody"] : [HAT_LANES[0]!, "hat"];
-    kept.push({ time: fret.time, lane, length: 0, sound, weight: 1, big: false, sub: 0, strong: false, pulse: true });
+      loudest === LOW
+        ? [KICK_LANE, "kick"]
+        : loudest === MID
+          ? [melodyLane, "melody"]
+          : [HAT_LANES[0]!, "hat"];
+    kept.push({
+      time: fret.time,
+      lane,
+      length: 0,
+      sound,
+      weight: 1,
+      big: false,
+      sub: 0,
+      strong: false,
+      pulse: true,
+    });
   }
   kept.sort((a, b) => a.time - b.time || a.lane - b.lane);
 
@@ -410,7 +493,11 @@ export function buildChart(waveform: TrackWaveform, bpm: number, rhythm?: TrackR
     const next = kept.slice(i + 1).find((o) => o.time > c.time + 0.01)?.time ?? Infinity;
     const start = mean(bands[MID]!, c.time, c.time + 0.06);
     let end = c.time;
-    while (end + beat / 2 <= next && end - c.time < bar * 2 && mean(bands[MID]!, end, end + beat / 2) > start * 0.7)
+    while (
+      end + beat / 2 <= next &&
+      end - c.time < bar * 2 &&
+      mean(bands[MID]!, end, end + beat / 2) > start * 0.7
+    )
       end += beat / 2;
     if (end - c.time >= beat * 1.5) c.length = end - c.time - beat / 4;
   });

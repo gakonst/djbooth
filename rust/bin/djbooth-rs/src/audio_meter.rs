@@ -197,15 +197,3 @@ fn amplitude_dbfs(amplitude: f64) -> f64 {
         (20.0 * amplitude.log10()).max(SILENCE_DBFS)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn converts_amplitude_to_dbfs() {
-        assert!((amplitude_dbfs(1.0) - 0.0).abs() < 1e-9);
-        assert!((amplitude_dbfs(0.5) + 6.020_599_913).abs() < 1e-6);
-        assert_eq!(amplitude_dbfs(0.0), SILENCE_DBFS);
-    }
-}

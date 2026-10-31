@@ -1,0 +1,35 @@
+/* Fit the existing hardware surface into the party stage's lower panel. */
+:root {
+  color-scheme: dark;
+}
+
+.monitor-shell {
+  min-width: 0;
+  width: 100%;
+  padding: 8px;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: transparent;
+}
+
+.hardware-view {
+  min-width: 0;
+  background: transparent;
+}
+
+.monitor-header,
+.activity-strip {
+  display: none;
+}
+
+.booth-grid.booth-grid {
+  --booth-height: min(calc(100vh - 16px), 30vw);
+  max-width: 100%;
+  margin: 0 auto;
+}

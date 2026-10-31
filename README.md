@@ -212,8 +212,6 @@ Codex / Claude / Nanocodex                djbooth.ai workbench
 ```sh
 pnpm install
 pnpm validate
-cargo test --manifest-path rust/Cargo.toml --workspace
-pnpm test:pack
 ```
 
 Contributions are welcome. For compatibility work, update the

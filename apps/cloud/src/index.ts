@@ -1,3 +1,5 @@
+import { libraryView } from "./library-view.js";
+import { usbExport } from "./usb-export.js";
 import { ensureDownloadWorkflow, type DownloadParams } from "./download-workflow.js";
 export { DownloadWorkflow } from "./download-workflow.js";
 import { type AgentTools } from "./agent-tools.js";
@@ -406,16 +408,22 @@ async function pull(url: URL, env: Env, account: Account): Promise<Response> {
   // Always start on the primary: advancing a cursor from a lagging replica can
   // otherwise make a device miss committed writes after a push on another device.
   const db = env.LIBRARY_DB.withSession("first-primary");
+  // Initial publisher reconciliation needs current versions, not obsolete waveform history.
+  // Native incremental clients retain the complete ordered feed by default.
+  const currentOnly =
+    url.searchParams.get("latest") === "1"
+      ? " AND sequence = (SELECT MAX(latest.sequence) FROM sync_changes AS latest WHERE latest.account_id = sync_changes.account_id AND latest.kind = sync_changes.kind AND latest.entity_id = sync_changes.entity_id)"
+      : "";
   const query =
     namespace === null
       ? db
           .prepare(
-            "SELECT * FROM sync_changes WHERE account_id = ? AND sequence > ? ORDER BY sequence LIMIT 101",
+            `SELECT * FROM sync_changes WHERE account_id = ? AND sequence > ?${currentOnly} ORDER BY sequence LIMIT 101`,
           )
           .bind(account.id, after)
       : db
           .prepare(
-            "SELECT * FROM sync_changes WHERE account_id = ? AND sequence > ? AND entity_id LIKE ? ORDER BY sequence LIMIT 101",
+            `SELECT * FROM sync_changes WHERE account_id = ? AND sequence > ? AND entity_id LIKE ?${currentOnly} ORDER BY sequence LIMIT 101`,
           )
           .bind(account.id, after, `${namespace}:%`);
   const { results } = await query.all<Row>();
@@ -801,7 +809,9 @@ export default {
       if (url.pathname.startsWith("/v1/auth/")) return await authRoute(request, env, readJSON);
       if (
         env.ASSETS &&
-        (url.pathname === "/" || url.pathname.startsWith("/assets/")) &&
+        (url.pathname === "/" ||
+          url.pathname.startsWith("/assets/") ||
+          url.pathname.startsWith("/workstation/")) &&
         ["GET", "HEAD"].includes(request.method)
       )
         return env.ASSETS.fetch(request);
@@ -846,6 +856,10 @@ export async function accountFetch(
 ): Promise<Response> {
   const url = new URL(request.url);
   try {
+    if (url.pathname === "/v1/usb/export")
+      return await usbExport(request, env, account, readJSON, (hash) =>
+        media(request, env, hash, account),
+      );
     if (url.pathname === "/v1/imports" || url.pathname.startsWith("/v1/imports/"))
       return await imports(request, env, account, readJSON);
     if (
@@ -854,6 +868,7 @@ export async function accountFetch(
       url.pathname.startsWith("/v1/crew-invites/")
     )
       return await crewRoute(request, env, account, readJSON);
+    if (url.pathname === "/v1/library") return libraryView(request, env, account);
     if (url.pathname === "/v1/sync/changes") {
       if (request.method === "GET") return await pull(url, env, account);
       if (request.method === "POST") return await push(request, env, account);

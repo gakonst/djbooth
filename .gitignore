@@ -35,6 +35,6 @@ downloads/
 .ytdlp-ts-music-archive*
 cookies.txt
 cookies-*.txt
-test/fixtures/private/
 
 /apps/cloud/public/
+/apps/party-visuals/public/clips/

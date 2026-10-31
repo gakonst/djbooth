@@ -35,6 +35,3 @@ rusqlite = { workspace = true, features = ["bundled"] }
 [target.'cfg(target_vendor = "apple")'.dependencies]
 libc.workspace = true
 socket2.workspace = true
-
-[dev-dependencies]
-tempfile.workspace = true

@@ -1,9 +1,31 @@
+import { createDanceMotion, type MusicDance } from "./music-dance.js";
 import * as THREE from "three";
 import { DEFAULT_VISUAL_LOOK, type VisualLook, type VisualTheme } from "./visual-presets.js";
 import { createDancingHaunts } from "./dancing-haunts.js";
 
 /** A procedural haunted stage. Every tunnel and its inhabitants belong to one deck. */
 export async function createHalloweenBooth(host: HTMLCanvasElement) {
+  const danceMotion = createDanceMotion();
+  let suppliedDance: MusicDance | undefined;
+  let dancePrevious: number | undefined;
+  let danceLeader = 0;
+  const readDance = (time: number, energy: Float32Array, motion: Float32Array) => {
+    for (let lane = 0; lane < 3; lane++)
+      if ((energy[lane * 4] ?? 0) > (energy[danceLeader * 4] ?? 0) * 1.25 + 0.01)
+        danceLeader = lane;
+    const e = danceLeader * 4;
+    const dt = dancePrevious === undefined ? 0 : time - dancePrevious;
+    dancePrevious = time;
+    const fallback = danceMotion.update(
+      motion[e + 3] ?? 0,
+      energy[e] ?? 0,
+      energy[e + 1] ?? 0,
+      energy[e + 2] ?? 0,
+      energy[e + 3] ?? 0,
+      dt,
+    );
+    return suppliedDance ?? fallback;
+  };
   const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
   renderer.domElement.className = "booth-visuals halloween-booth";
   renderer.domElement.dataset.renderer = "three-halloween";
@@ -20,7 +42,7 @@ export async function createHalloweenBooth(host: HTMLCanvasElement) {
   const themes: VisualTheme[] = ["halloween", "eighties", "y2k", "tech-house"];
   const weights = [1, 0, 0, 0];
   const themeColors = [
-    [0xe8ddbf, 0xa44e48, 0xcfc4a4],
+    [0xff963d, 0xb48ae8, 0xb9e9bd],
     [0xff328e, 0x23daff, 0xb04aff],
     [0xff56cd, 0x9defff, 0xffb9eb],
     [0x9aff32, 0xe4ffef, 0x45ffbb],
@@ -34,17 +56,24 @@ export async function createHalloweenBooth(host: HTMLCanvasElement) {
   const neonLight = new THREE.DirectionalLight(0xff4bbf, 2);
   neonLight.position.set(5, -2, 3);
   scene.add(neonLight);
-  const orange = new THREE.MeshBasicMaterial({ color: 0xf45a08 });
-  const stem = new THREE.MeshBasicMaterial({ color: 0x657b19 });
-  const green = new THREE.MeshBasicMaterial({ color: 0xb5ff37 });
+  const orange = new THREE.MeshStandardMaterial({
+    color: 0xd95b12,
+    roughness: 0.62,
+    metalness: 0.08,
+  });
+  const stem = new THREE.MeshStandardMaterial({ color: 0x586c32, roughness: 0.95 });
+  const green = new THREE.MeshBasicMaterial({ color: 0xffc775 });
   const ink = new THREE.MeshBasicMaterial({ color: 0x10051d, side: THREE.DoubleSide });
-  const ghostMaterial = new THREE.MeshBasicMaterial({
-    color: 0xc3b6fa,
+  const ghostMaterial = new THREE.MeshStandardMaterial({
+    color: 0xb7abd8,
+    roughness: 0.82,
+    emissive: 0x1e1434,
+    emissiveIntensity: 0.35,
     transparent: true,
     opacity: 0.52,
     side: THREE.DoubleSide,
   });
-  const sphere = new THREE.SphereGeometry(1, 16, 12);
+  const sphere = new THREE.SphereGeometry(1, 24, 16);
   const torus = new THREE.TorusGeometry(1, 0.012, 5, 64);
   const eye = new THREE.ConeGeometry(0.11, 0.18, 3);
   const stemGeometry = new THREE.CylinderGeometry(0.055, 0.085, 0.23, 6);
@@ -52,7 +81,14 @@ export async function createHalloweenBooth(host: HTMLCanvasElement) {
   ghostShape.moveTo(-0.34, -0.3);
   ghostShape.bezierCurveTo(-0.6, 0.85, 0.6, 0.85, 0.34, -0.3);
   for (let i = 0; i <= 6; i++) ghostShape.lineTo(0.34 - (i * 0.68) / 6, -0.3 + (i % 2) * 0.15);
-  const ghostGeometry = new THREE.ShapeGeometry(ghostShape);
+  const ghostGeometry = new THREE.ExtrudeGeometry(ghostShape, {
+    depth: 0.065,
+    bevelEnabled: true,
+    bevelSize: 0.035,
+    bevelThickness: 0.025,
+    bevelSegments: 2,
+    steps: 1,
+  });
   const batShape = new THREE.Shape();
   batShape.moveTo(0, 0.06);
   batShape.lineTo(-0.18, 0.2);
@@ -383,6 +419,135 @@ export async function createHalloweenBooth(host: HTMLCanvasElement) {
   });
   const heroPortal = new THREE.Mesh(portalGeometry, heroPortalMaterial);
   hero.add(heroSun, heroStar, heroPortal);
+  // A dimensional harvest medallion: ribbed ceramic pumpkin, cut-out face,
+  // curling copper vines, and an etched harvest moon behind the silhouette.
+  const harvest = new THREE.Group();
+  harvest.name = "harvest-moon-medallion";
+  hero.add(harvest);
+  const harvestSkin = new THREE.MeshStandardMaterial({
+    color: 0xd7631c,
+    roughness: 0.42,
+    metalness: 0.18,
+    transparent: true,
+  });
+  const harvestGold = new THREE.MeshStandardMaterial({
+    color: 0xc8984a,
+    roughness: 0.4,
+    metalness: 0.65,
+    transparent: true,
+  });
+  const harvestDark = new THREE.MeshBasicMaterial({ color: 0x251022, transparent: true });
+  const harvestGlow = new THREE.MeshBasicMaterial({ color: 0xffd382, transparent: true });
+  const moonMaterial = new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    uniforms: { fade: { value: 0 }, warmth: { value: 0 } },
+    vertexShader: `varying vec2 moonUV; void main(){moonUV=uv;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}`,
+    fragmentShader: `varying vec2 moonUV; uniform float fade; uniform float warmth;
+      void main(){
+        vec2 p=moonUV*2.-1.; float r=length(p);
+        float grain=sin(p.x*113.+sin(p.y*79.))*sin(p.y*97.+p.x*17.);
+        float maria=sin(p.x*8.+sin(p.y*9.))*sin(p.y*7.-p.x*3.);
+        float rim=1.-smoothstep(.93,1.,r);
+        float shade=.62+.18*maria+.035*grain;
+        shade*=.68+.32*sqrt(max(0.,1.-r*r));
+        vec3 color=mix(vec3(.68,.36,.17),vec3(1.,.81,.48),shade);
+        gl_FragColor=vec4(color*(.8+warmth*.12),rim*fade);
+      }`,
+  });
+  const moon = new THREE.Mesh(new THREE.PlaneGeometry(2.15, 2.15), moonMaterial);
+  moon.position.set(0, 0.25, -0.8);
+  harvest.add(moon);
+  const crown = new THREE.Mesh(new THREE.TorusGeometry(1.11, 0.023, 6, 96), harvestGold);
+  crown.position.set(0, 0.25, -0.7);
+  harvest.add(crown);
+  const pumpkinHero = new THREE.Group();
+  pumpkinHero.position.set(0, -0.14, 0);
+  harvest.add(pumpkinHero);
+  const ribs = new THREE.InstancedMesh(sphere, harvestSkin, 10);
+  const detailTransform = new THREE.Object3D();
+  for (let i = 0; i < 10; i++) {
+    const angle = (i * Math.PI) / 5;
+    detailTransform.position.set(Math.cos(angle) * 0.29, 0, Math.sin(angle) * 0.22);
+    detailTransform.scale.set(0.32, 0.51, 0.32);
+    detailTransform.updateMatrix();
+    ribs.setMatrixAt(i, detailTransform.matrix);
+  }
+  pumpkinHero.add(ribs);
+  const stalkPath = new THREE.CatmullRomCurve3([
+    new THREE.Vector3(0, 0.43, 0),
+    new THREE.Vector3(-0.06, 0.64, 0),
+    new THREE.Vector3(0.03, 0.79, -0.01),
+    new THREE.Vector3(0.16, 0.82, -0.04),
+  ]);
+  pumpkinHero.add(
+    new THREE.Mesh(new THREE.TubeGeometry(stalkPath, 16, 0.055, 7, false), harvestGold),
+  );
+  for (const side of [-1, 1]) {
+    const socketShape = new THREE.Shape();
+    socketShape.moveTo(-0.14, -0.1);
+    socketShape.lineTo(0.14, -0.075);
+    socketShape.lineTo(side * 0.04, 0.16);
+    socketShape.closePath();
+    const socketGeometry = new THREE.ShapeGeometry(socketShape);
+    const socket = new THREE.Mesh(socketGeometry, harvestDark);
+    socket.position.set(side * 0.23, 0.12, 0.53);
+    pumpkinHero.add(socket);
+    const pupil = new THREE.Mesh(socketGeometry, harvestGlow);
+    pupil.position.copy(socket.position);
+    pupil.position.z += 0.005;
+    pupil.scale.setScalar(0.7);
+    pumpkinHero.add(pupil);
+    const vinePoints: THREE.Vector3[] = [];
+    for (let i = 0; i <= 48; i++) {
+      const u = i / 48,
+        a = u * Math.PI * 3.1;
+      const radius = 0.32 * (1 - u) + 0.035;
+      vinePoints.push(
+        new THREE.Vector3(side * (0.63 + Math.cos(a) * radius), -0.24 + Math.sin(a) * radius, 0.12),
+      );
+    }
+    pumpkinHero.add(
+      new THREE.Mesh(
+        new THREE.TubeGeometry(new THREE.CatmullRomCurve3(vinePoints), 48, 0.018, 5, false),
+        harvestGold,
+      ),
+    );
+  }
+  const grinShape = new THREE.Shape();
+  grinShape.moveTo(-0.37, -0.15);
+  grinShape.quadraticCurveTo(0, -0.3, 0.37, -0.15);
+  grinShape.quadraticCurveTo(0, -0.55, -0.37, -0.15);
+  const grinHero = new THREE.Mesh(new THREE.ShapeGeometry(grinShape, 24), harvestGlow);
+  grinHero.position.z = 0.54;
+  pumpkinHero.add(grinHero);
+  const teeth = new THREE.InstancedMesh(new THREE.BoxGeometry(0.075, 0.1, 0.025), harvestDark, 5);
+  for (let i = 0; i < 5; i++) {
+    detailTransform.position.set((i - 2) * 0.12, -0.23 - Math.abs(i - 2) * 0.015, 0.56);
+    detailTransform.scale.set(1, 1, 1);
+    detailTransform.updateMatrix();
+    teeth.setMatrixAt(i, detailTransform.matrix);
+  }
+  pumpkinHero.add(teeth);
+  // Tiny radial studs and paired bat silhouettes give the moon a crafted frame.
+  const studs = new THREE.InstancedMesh(new THREE.OctahedronGeometry(0.035), harvestGold, 24);
+  for (let i = 0; i < 24; i++) {
+    const a = (i * Math.PI) / 12;
+    detailTransform.position.set(Math.cos(a) * 1.11, 0.25 + Math.sin(a) * 1.11, -0.65);
+    detailTransform.rotation.z = a;
+    detailTransform.updateMatrix();
+    studs.setMatrixAt(i, detailTransform.matrix);
+  }
+  harvest.add(studs);
+  const moonBats: THREE.Mesh[] = [];
+  for (let i = 0; i < 3; i++) {
+    const bat = new THREE.Mesh(batGeometry, harvestDark);
+    bat.position.set((i - 1) * 0.46, 0.7 + (i % 2) * 0.19, -0.55);
+    bat.scale.setScalar(0.19 + i * 0.025);
+    harvest.add(bat);
+    moonBats.push(bat);
+  }
+  const harvestMaterials = [harvestSkin, harvestGold, harvestDark, harvestGlow];
   const previousVisibility = host.style.visibility;
   host.after(renderer.domElement);
   host.style.visibility = "hidden";
@@ -392,6 +557,9 @@ export async function createHalloweenBooth(host: HTMLCanvasElement) {
     previousTime = 0;
   let sceneTime = 0;
   return {
+    setDance(value: MusicDance) {
+      suppliedDance = value;
+    },
     setLook(next: VisualLook) {
       const bounded = (value: number, min: number, max: number, fallback: number) =>
         Number.isFinite(value) ? THREE.MathUtils.clamp(value, min, max) : fallback;
@@ -454,6 +622,7 @@ export async function createHalloweenBooth(host: HTMLCanvasElement) {
         stageCamera.bottom = -h / 2;
         stageCamera.updateProjectionMatrix();
       }
+      const dance = readDance(time, energy, motion);
       const dt = Math.min(0.05, Math.max(0, time - previousTime));
       previousTime = time;
       const blend = 1 - Math.exp(-dt * 2);
@@ -473,7 +642,7 @@ export async function createHalloweenBooth(host: HTMLCanvasElement) {
           look.halloween * Math.min(1, intensity) * (material === ghostMaterial ? 0.52 : 1);
       }
       const halfHeight = Math.tan(THREE.MathUtils.degToRad(26)) * 9;
-      let shake = 0;
+
       for (const lane of lanes) {
         const e = lane.lane * 4;
         lane.root.visible = rgba.length >= (lane.lane + 1) * 1024;
@@ -490,7 +659,7 @@ export async function createHalloweenBooth(host: HTMLCanvasElement) {
         lane.burst *= Math.exp(-dt * 4.5);
         if (level <= 0.025) lane.burst = 0;
         const pulse = lane.burst * Math.min(1.5, damping) * intensity;
-        shake = Math.min(1, Math.max(shake, pulse * low));
+
         lane.root.position.set(
           (origins[lane.lane * 2] ?? (lane.lane - 1) * 0.6) * halfHeight * camera.aspect,
           (origins[lane.lane * 2 + 1] ?? 0) * halfHeight,
@@ -642,35 +811,37 @@ export async function createHalloweenBooth(host: HTMLCanvasElement) {
         }
         lane.particles.instanceMatrix.needsUpdate = true;
         lane.pumpkins.forEach((pumpkin, i) => {
-          pumpkin.visible = false;
+          pumpkin.visible = look.halloween > 0.01 && i < Math.ceil(look.density * 4);
           const a = (i * Math.PI) / 2 + 0.7;
           pumpkin.position.set(
             Math.cos(a) * 4.8,
-            Math.sin(a) * 4.8 + Math.sin(t + i) * 0.08,
+            Math.sin(a) * 4.8 + dance.bounce * damping * 0.15,
             -i * 1.4,
           );
-          pumpkin.rotation.z = Math.sin(t * 0.5 + i) * 0.13;
-          pumpkin.scale.setScalar(1 + pulse * 0.22 + low * 0.1);
+          pumpkin.rotation.z = dance.sway * damping * (i % 2 ? -0.13 : 0.13);
+          pumpkin.scale.set(1 + dance.kick * damping * 0.035, 1 - dance.kick * damping * 0.045, 1);
         });
         lane.ghosts.forEach((ghost, i) => {
-          ghost.visible = false;
+          ghost.visible = look.halloween > 0.01 && i < Math.ceil(look.density * 3);
           const a = (i * Math.PI) / 2 + t * 0.06 + 1.5;
-          ghost.position.set(Math.cos(a) * 3.2, Math.sin(a) * 2.4 + Math.sin(t + i) * 0.2, -2 - i);
-          ghost.rotation.z = Math.sin(t + i) * 0.18;
+          ghost.position.set(
+            Math.cos(a) * 3.2,
+            Math.sin(a) * 2.4 + dance.bounce * damping * 0.25,
+            -2 - i,
+          );
+          ghost.rotation.z = dance.sway * damping * 0.16;
           ghost.scale.setScalar(0.8 + mid * 0.3);
         });
         lane.bats.forEach((bat, i) => {
-          bat.visible = false;
+          bat.visible = look.halloween > 0.01 && i < Math.ceil(look.density * 5);
           const a = i * 2.4 + t * (0.08 + lane.level * 0.08);
           bat.position.set(Math.cos(a) * (2.4 + (i % 3)), Math.sin(a) * 3, -1 - i * 0.6);
           bat.rotation.z = Math.sin(a) * 0.4;
-          bat.scale.set(0.3 + Math.abs(Math.sin(t * 5 + i)) * 0.22 * damping, 0.4 + high * 0.1, 1);
+          bat.scale.set(0.3 + dance.tap * 0.22 * damping, 0.4 + high * 0.1, 1);
         });
       }
-      camera.position.x = Math.sin(t * 29) * shake * 0.22 * damping;
-      camera.position.y = Math.cos(t * 23) * shake * 0.16 * damping;
-      camera.position.z = 9 - shake * 1.1 * damping;
-      camera.rotation.z = (Math.sin(t * 0.13) * 0.015 + Math.sin(t * 5) * shake * 0.045) * damping;
+      camera.position.set(0, 0, 9);
+      camera.rotation.z = 0;
       const hardware = Array.from(
         document.querySelectorAll<HTMLElement>(".booth-grid > .cdj3000, .booth-grid > .djma9"),
       )
@@ -714,7 +885,7 @@ export async function createHalloweenBooth(host: HTMLCanvasElement) {
         haunt.group.visible = scale > 7 && look.halloween > 0.005;
         haunt.group.position.set(band.x + band.w / 2 - w / 2, h / 2 - band.y - band.h / 2, 10);
         haunt.group.scale.setScalar(scale);
-        haunt.update(t + i * 0.3, live.burst, live.level * Math.min(1.5, intensity), damping);
+        haunt.update(time, dance.beat, live.level, damping, dance);
       });
       // The mixer gets a real tiled mirrorball in the upper band in every look.
       const ballRadius = Math.max(5, Math.min(45, top * 0.25, w * 0.035));
@@ -764,6 +935,24 @@ export async function createHalloweenBooth(host: HTMLCanvasElement) {
         5,
       );
       hero.scale.setScalar(Math.max(1, Math.min(top * 0.3, w * 0.07)));
+      const harvestFade = weights[0]! * look.halloween * Math.min(1, intensity);
+      harvest.visible = harvestFade > 0.005;
+      harvestMaterials.forEach((material) => {
+        material.opacity = harvestFade;
+        material.depthWrite = harvestFade > 0.98;
+      });
+      moonMaterial.uniforms.fade!.value = harvestFade;
+      moonMaterial.uniforms.warmth!.value = live.level;
+      pumpkinHero.rotation.set(
+        -dance.nod * damping * 0.055,
+        dance.twist * damping * 0.12,
+        dance.sway * damping * 0.075,
+      );
+      pumpkinHero.position.y = -0.14 + dance.bounce * damping * 0.09;
+      pumpkinHero.scale.set(1 + dance.kick * damping * 0.025, 1 - dance.kick * damping * 0.035, 1);
+      moonBats.forEach((bat, i) => {
+        bat.rotation.z = dance.sway * damping * (i % 2 ? -0.08 : 0.08);
+      });
       heroSunMaterial.opacity = weights[1]! * Math.min(1, intensity);
       heroStarMaterial.opacity = weights[2]! * Math.min(1, intensity);
       heroPortalMaterial.opacity = weights[3]! * Math.min(1, intensity);

@@ -158,8 +158,9 @@ const CC: Record<number, Definition> = {
 export function createA9Decoder() {
   let msb = 0,
     lsb = 0;
+  const selected = new Map<string, string>();
   return (bytes: Uint8Array, timestamp: number): { name: string; control: ControlState } | null => {
-    if (bytes.length !== 3) return null;
+    if (bytes.length !== 3 || bytes[1]! > 127 || bytes[2]! > 127) return null;
     const status = bytes[0]! & 0xf0,
       cc = bytes[1]!,
       value = status === 0x80 ? 0 : bytes[2]!;
@@ -184,6 +185,12 @@ export function createA9Decoder() {
     }
     if (!definition) return null;
     const [name, kind, low, middle, high] = definition;
+    if (kind === "selector") {
+      if (value) selected.set(name, low!);
+      // An old selector's release can arrive after the next selector's press.
+      else if (selected.has(name) && selected.get(name) !== low) return null;
+      else selected.delete(name);
+    }
     const state =
       kind === "switch"
         ? value

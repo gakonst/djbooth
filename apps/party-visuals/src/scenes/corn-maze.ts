@@ -1,3 +1,5 @@
+import { STILL_DANCE, type MusicDance } from "../../../dj-monitor/src/music-dance.js";
+import { createHauntedKit } from "./haunted-materials.js";
 import * as THREE from "three";
 import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
@@ -8,7 +10,13 @@ import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import { DEFAULT_VISUAL_LOOK, type VisualLook } from "../../../dj-monitor/src/visual-presets.js";
 import { analyzeSong, idleSong, sectionAt, type SongMap, type Style } from "../music/song-map.js";
 import type { MusicLane, SceneEngine } from "../scenes.js";
-import { ACTOR_KINDS, createActor, disposeActor, type Actor, type ActorKind } from "./corn-maze-actors.js";
+import {
+  ACTOR_KINDS,
+  createActor,
+  disposeActor,
+  type Actor,
+  type ActorKind,
+} from "./corn-maze-actors.js";
 import { CELL, Maze } from "./corn-maze-path.js";
 
 const LANES = 3;
@@ -83,7 +91,8 @@ function planScares(song: SongMap, every: number): Scare[] {
   const accepted: { at: number; big: boolean }[] = [];
   const fits = (at: number) => accepted.every((s) => Math.abs(s.at - at) >= MIN_GAP);
   for (const at of big) if (fits(at)) accepted.push({ at, big: true });
-  for (const at of small.sort((a, b) => a - b)) if (at > 4 && fits(at)) accepted.push({ at, big: false });
+  for (const at of small.sort((a, b) => a - b))
+    if (at > 4 && fits(at)) accepted.push({ at, big: false });
   accepted.sort((a, b) => a.at - b.at);
   // Take the actors in turn, starting somewhere different for each song, so none comes twice running.
   const first = Math.floor(hash(song.duration) * ACTOR_KINDS.length);
@@ -124,10 +133,14 @@ function stalkGeometry() {
     leaf.translate(0, 0.45 + k * 0.3, 0);
     paint(leaf, () => color.lerpColors(green, dry, 0.3 + hash(k + 4) * 0.7));
   }
-  const ear = new THREE.CylinderGeometry(0.045, 0.03, 0.32, 6).rotateZ(0.5).translate(0.07, 1.55, 0);
+  const ear = new THREE.CylinderGeometry(0.045, 0.03, 0.32, 6)
+    .rotateZ(0.5)
+    .translate(0.07, 1.55, 0);
   paint(ear, () => color.set(0xa99a5c));
   for (let k = 0; k < 4; k++) {
-    const tassel = new THREE.ConeGeometry(0.012, 0.42, 3).rotateZ((k - 1.5) * 0.35).translate((k - 1.5) * 0.04, 3.15, 0);
+    const tassel = new THREE.ConeGeometry(0.012, 0.42, 3)
+      .rotateZ((k - 1.5) * 0.35)
+      .translate((k - 1.5) * 0.04, 3.15, 0);
     paint(tassel, () => color.set(0xcdb571));
   }
   const merged = mergeGeometries(parts.map((p) => p.toNonIndexed()))!;
@@ -151,7 +164,9 @@ function pumpkinGeometry() {
 
 /** A jack-o'-lantern's carved face, sitting just proud of the pumpkin's front. */
 function faceGeometry() {
-  const parts: THREE.BufferGeometry[] = [-1, 1].map((side) => new THREE.CircleGeometry(0.05, 3).rotateZ(Math.PI / 2).translate(side * 0.08, 0.24, 0.25));
+  const parts: THREE.BufferGeometry[] = [-1, 1].map((side) =>
+    new THREE.CircleGeometry(0.05, 3).rotateZ(Math.PI / 2).translate(side * 0.08, 0.24, 0.25),
+  );
   const grin = new THREE.Shape();
   grin.moveTo(-0.13, 0);
   for (let k = 0; k <= 6; k++) grin.lineTo(-0.13 + (k / 6) * 0.26, k % 2 ? -0.025 : 0.01);
@@ -183,7 +198,11 @@ function dirtTexture() {
  * scarecrow and something tall that waits for the light to go out.
  */
 export async function createCornMaze(host: HTMLCanvasElement): Promise<SceneEngine> {
-  const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+  let dance: MusicDance = STILL_DANCE;
+  const renderer = new THREE.WebGLRenderer({
+    antialias: true,
+    powerPreference: "high-performance",
+  });
   renderer.domElement.setAttribute("aria-hidden", "true");
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.25;
@@ -197,6 +216,7 @@ export async function createCornMaze(host: HTMLCanvasElement): Promise<SceneEngi
   scene.add(camera);
   const disposables: { dispose(): void }[] = [];
   const keep = <T extends { dispose(): void }>(item: T) => (disposables.push(item), item);
+  const haunted = createHauntedKit(keep);
 
   // Moonlight from above and a handheld flashlight that does most of the work.
   const moonDirection = new THREE.Vector3(-0.35, 0.55, -0.75).normalize();
@@ -208,6 +228,13 @@ export async function createCornMaze(host: HTMLCanvasElement): Promise<SceneEngi
   flashlight.position.set(0.22, -0.25, 0.1);
   flashlight.target.position.set(0, -0.6, -6);
   camera.add(flashlight, flashlight.target);
+  const carriedLantern = haunted.lantern();
+  carriedLantern.position.set(-0.43, -0.65, -0.85);
+  carriedLantern.scale.setScalar(0.48);
+  camera.add(carriedLantern);
+  const lanternLight = new THREE.PointLight(0xff9c43, 1.8, 5, 2);
+  lanternLight.position.copy(carriedLantern.position);
+  camera.add(lanternLight);
 
   // Sky: a dark gradient, a hazy moon and slow clouds, following the camera.
   const skyMaterial = keep(
@@ -215,7 +242,12 @@ export async function createCornMaze(host: HTMLCanvasElement): Promise<SceneEngi
       side: THREE.BackSide,
       depthWrite: false,
       fog: false,
-      uniforms: { time: { value: 0 }, moon: { value: moonDirection }, flash: { value: 0 }, haze: { value: fogColor } },
+      uniforms: {
+        time: { value: 0 },
+        moon: { value: moonDirection },
+        flash: { value: 0 },
+        haze: { value: fogColor },
+      },
       vertexShader: /* glsl */ `varying vec3 vDir;
         void main() { vDir = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.); }`,
       fragmentShader: /* glsl */ `uniform float time, flash; uniform vec3 moon, haze; varying vec3 vDir;
@@ -254,7 +286,15 @@ export async function createCornMaze(host: HTMLCanvasElement): Promise<SceneEngi
   dirt.repeat.set(48, 48);
   const ground = new THREE.Mesh(
     keep(new THREE.PlaneGeometry(192, 192).rotateX(-Math.PI / 2)),
-    keep(new THREE.MeshLambertMaterial({ color: 0xffffff, map: dirt })),
+    keep(
+      new THREE.MeshStandardMaterial({
+        color: 0xbab1a8,
+        map: dirt,
+        bumpMap: dirt,
+        bumpScale: 0.045,
+        roughness: 0.96,
+      }),
+    ),
   );
   scene.add(ground);
 
@@ -264,12 +304,18 @@ export async function createCornMaze(host: HTMLCanvasElement): Promise<SceneEngi
     gust: { value: 0 },
     rustle: { value: 0 },
     rustleAt: { value: new THREE.Vector3() },
+    groove: { value: new THREE.Vector4() },
   };
-  const cornMaterial = keep(new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide }));
+  const cornMaterial = keep(
+    new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide }),
+  );
   cornMaterial.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, cornUniforms);
     shader.vertexShader = shader.vertexShader
-      .replace("#include <common>", "#include <common>\nuniform float time, gust, rustle; uniform vec3 rustleAt;")
+      .replace(
+        "#include <common>",
+        "#include <common>\nuniform float time, gust, rustle; uniform vec3 rustleAt; uniform vec4 groove;",
+      )
       .replace(
         "#include <begin_vertex>",
         /* glsl */ `#include <begin_vertex>
@@ -279,7 +325,9 @@ export async function createCornMaze(host: HTMLCanvasElement): Promise<SceneEngi
         vec2 away = root.xz - rustleAt.xz;
         float near = rustle * exp(-dot(away, away) * .45);
         vec2 thrash = vec2(sin(time * 29. + root.z * 9.), cos(time * 23. + root.x * 7.)) * near * .45;
-        transformed.xz += (vec2(wind, wind * .5) * (1. + gust * 1.5) + thrash) * bend;`,
+        float counter = sin(root.x * 2.1 + root.z * 3.7) < 0. ? -1. : 1.;
+        vec2 dance = vec2(groove.x * .34 + groove.z * .16 * counter, groove.y * .2 + groove.w * .07 * counter);
+        transformed.xz += (vec2(wind, wind * .5) + dance + thrash) * bend;`,
       );
   };
   const corn = new THREE.InstancedMesh(keep(stalkGeometry()), cornMaterial, MAX_STALKS);
@@ -288,7 +336,9 @@ export async function createCornMaze(host: HTMLCanvasElement): Promise<SceneEngi
     keep(new THREE.MeshStandardMaterial({ color: 0xc8581a, roughness: 0.6, emissive: 0x1a0600 })),
     MAX_PUMPKINS,
   );
-  const faceMaterial = keep(new THREE.MeshBasicMaterial({ color: new THREE.Color(0xff9a1a).multiplyScalar(2.6) }));
+  const faceMaterial = keep(
+    new THREE.MeshBasicMaterial({ color: new THREE.Color(0xff9a1a).multiplyScalar(2.6) }),
+  );
   const faces = new THREE.InstancedMesh(keep(faceGeometry()), faceMaterial, MAX_PUMPKINS);
   corn.setColorAt(0, new THREE.Color(1, 1, 1));
   for (const mesh of [corn, pumpkins, faces]) {
@@ -319,11 +369,16 @@ export async function createCornMaze(host: HTMLCanvasElement): Promise<SceneEngi
     }),
   );
   const mistGeometry = keep(new THREE.BufferGeometry());
-  const mistPosition = new THREE.BufferAttribute(new Float32Array(MIST * 3), 3).setUsage(THREE.DynamicDrawUsage);
+  const mistPosition = new THREE.BufferAttribute(new Float32Array(MIST * 3), 3).setUsage(
+    THREE.DynamicDrawUsage,
+  );
   mistGeometry.setAttribute("position", mistPosition);
   mistGeometry.setAttribute(
     "size",
-    new THREE.BufferAttribute(Float32Array.from({ length: MIST }, () => 1.5 + Math.random() * 2.5), 1),
+    new THREE.BufferAttribute(
+      Float32Array.from({ length: MIST }, () => 1.5 + Math.random() * 2.5),
+      1,
+    ),
   );
   const mist = new THREE.Points(mistGeometry, mistMaterial);
   mist.frustumCulled = false;
@@ -361,13 +416,13 @@ export async function createCornMaze(host: HTMLCanvasElement): Promise<SceneEngi
       void main() {
         vec2 c = vUv - .5;
         float r = dot(c, c);
-        vec2 shift = c * split * (.02 + r * .08);
+        vec2 shift = c * split * (.003 + r * .012);
         vec3 color = vec3(texture2D(tDiffuse, vUv + shift).r, texture2D(tDiffuse, vUv).g, texture2D(tDiffuse, vUv - shift).b);
         float vignette = smoothstep(.62, .08, r);
-        color *= .25 + .75 * vignette;
-        color = mix(color, flashColor, flash * (.35 + .65 * (1. - vignette * .6)));
+        color *= .55 + .45 * vignette;
+        color = mix(color, flashColor, flash * .24 * (1. - vignette * .6));
         color *= 1. - dark;
-        color += (hash(gl_FragCoord.xy + fract(time * 13.) * 91.) - .5) * .04;
+        color += (hash(gl_FragCoord.xy + fract(time * 13.) * 91.) - .5) * .012;
         gl_FragColor = vec4(color, 1.);
       }`,
   });
@@ -424,7 +479,8 @@ export async function createCornMaze(host: HTMLCanvasElement): Promise<SceneEngi
   const songFor = (lane: MusicLane) => {
     if (!lane.trackId || !lane.waveform) return undefined;
     let song = songs.get(lane.trackId);
-    if (!song) songs.set(lane.trackId, (song = analyzeSong(lane.waveform, lane.bpm)));
+    if (!song)
+      songs.set(lane.trackId, (song = analyzeSong(lane.waveform, lane.sourceBpm ?? lane.bpm)));
     return song;
   };
 
@@ -479,7 +535,11 @@ export async function createCornMaze(host: HTMLCanvasElement): Promise<SceneEngi
         dummy.scale.set(1, stalk.height / 3, 1);
         dummy.updateMatrix();
         corn.setMatrixAt(stalks, dummy.matrix);
-        color.setRGB(0.75 + stalk.tone * 0.4, 0.75 + stalk.tone * 0.3, 0.7 + (1 - stalk.tone) * 0.2);
+        color.setRGB(
+          0.75 + stalk.tone * 0.4,
+          0.75 + stalk.tone * 0.3,
+          0.7 + (1 - stalk.tone) * 0.2,
+        );
         corn.setColorAt(stalks++, color);
       }
       for (const pumpkin of grown.pumpkins) {
@@ -571,7 +631,8 @@ export async function createCornMaze(host: HTMLCanvasElement): Promise<SceneEngi
     switch (mode) {
       case "side": {
         // Hidden in the wall, the corn thrashing, then out at arm's length and back in.
-        const out = u < 0 ? 1 : u < 0.2 ? 1 - ease(u / 0.2) : u < 1.25 ? 0 : ease((u - 1.25) / 0.55);
+        const out =
+          u < 0 ? 1 : u < 0.2 ? 1 - ease(u / 0.2) : u < 1.25 ? 0 : ease((u - 1.25) / 0.55);
         const along = Math.max(active.anchor, travel + 1.5);
         placeOnPath(along, side * (0.7 + out * (CELL / 2 + 0.3)), 0, root.position);
         root.visible = true;
@@ -588,7 +649,12 @@ export async function createCornMaze(host: HTMLCanvasElement): Promise<SceneEngi
       case "rush": {
         // Glimpsed far down the corridor, then straight through you.
         const d = u < 0 ? 1.1 + 16 * Math.pow(-u / LEAD.rush, 1.7) : 1.1 - (u / LENGTH.rush) * 2.4;
-        placeOnPath(travel + d, Math.sin(clock * 2) * 0.15, 0.15 + Math.sin(clock * 3.3) * 0.08, root.position);
+        placeOnPath(
+          travel + d,
+          Math.sin(clock * 2) * 0.15,
+          0.15 + Math.sin(clock * 3.3) * 0.08,
+          root.position,
+        );
         root.visible = d > -0.4;
         fear = clamp01(0.3 + (u + 0.9));
         if (u > -0.9) effects.slow = 0.3;
@@ -600,14 +666,20 @@ export async function createCornMaze(host: HTMLCanvasElement): Promise<SceneEngi
         const lateral = side * (CELL / 2 + 2) * (1 - 2 * k);
         const ahead = 6 - k * 4 + travel;
         const lift = 3.4 - Math.sin(k * Math.PI) * 2.3 - k * 0.6;
-        placeOnPath(ahead, lateral, u < 0 ? 3.4 - (1 - (u + LEAD.swoop) / LEAD.swoop) * 1.5 : lift, root.position);
+        placeOnPath(
+          ahead,
+          lateral,
+          u < 0 ? 3.4 - (1 - (u + LEAD.swoop) / LEAD.swoop) * 1.5 : lift,
+          root.position,
+        );
         root.visible = u > -LEAD.swoop * 0.6;
         fear = u < 0 ? 0.3 : 1;
         if (u < 0.2) {
           effects.rustle = 0.6;
           placeOnPath(travel + 6, side * (CELL / 2 + 0.6), 0, cornUniforms.rustleAt.value);
         }
-        if (u > -0.2) effects.gazeAt = wanted.copy(root.position).setY(root.position.y + actor.face * 0.8);
+        if (u > -0.2)
+          effects.gazeAt = wanted.copy(root.position).setY(root.position.y + actor.face * 0.8);
         if (u >= 0) effects.slow = 0.35;
         break;
       }
@@ -627,12 +699,20 @@ export async function createCornMaze(host: HTMLCanvasElement): Promise<SceneEngi
       }
     }
     root.lookAt(camera.position.x, root.position.y, camera.position.z);
-    actor.pose(clock, fear * (0.85 + 0.15 * Math.sin(clock * 17)));
+    actor.pose(
+      clock,
+      fear * (0.85 + 0.15 * Math.sin(clock * 17)),
+      dance,
+      reduced.matches ? 0 : look.motion,
+    );
     // Keep trembling while it is in your face.
     if (fear > 0.5 && !reduced.matches) shake = Math.max(shake, 0.18);
   };
 
   return {
+    setDance(next) {
+      dance = next;
+    },
     setLook(next) {
       target = next;
     },
@@ -662,6 +742,10 @@ export async function createCornMaze(host: HTMLCanvasElement): Promise<SceneEngi
       const dt = previous === undefined ? 0 : Math.min(0.05, Math.max(0, time - previous));
       previous = time;
       clock += dt;
+      const danceAmount = reduced.matches ? 0 : Math.max(0, look.motion);
+      carriedLantern.rotation.z = dance.sway * danceAmount * 0.16;
+      carriedLantern.rotation.x = dance.nod * danceAmount * 0.07;
+      carriedLantern.position.y = -0.65 + dance.bounce * danceAmount * 0.055;
       const blend = 1 - Math.exp(-dt * 2);
       for (const key of ["intensity", "motion", "density", "halloween"] as const)
         look[key] += (target[key] - look[key]) * blend;
@@ -690,7 +774,12 @@ export async function createCornMaze(host: HTMLCanvasElement): Promise<SceneEngi
       // Walk the path at eye height, bobbing with each step on the beat.
       const stride = Math.min(1, speed / 2);
       const step = Math.abs(Math.sin(phase * Math.PI));
-      placeOnPath(travel, Math.sin(phase * Math.PI) * 0.04 * stride, EYE + step * 0.05 * stride, camera.position);
+      placeOnPath(
+        travel,
+        Math.sin(phase * Math.PI) * 0.04 * stride,
+        EYE + step * 0.05 * stride,
+        camera.position,
+      );
       placeOnPath(travel + 4, 0, EYE - 0.12, bend);
       if (!gazeReady) {
         gaze.copy(bend);
@@ -709,31 +798,52 @@ export async function createCornMaze(host: HTMLCanvasElement): Promise<SceneEngi
       camera.updateProjectionMatrix();
 
       sky.position.copy(camera.position);
-      ground.position.set(Math.round(camera.position.x / CELL) * CELL, 0, Math.round(camera.position.z / CELL) * CELL);
+      ground.position.set(
+        Math.round(camera.position.x / CELL) * CELL,
+        0,
+        Math.round(camera.position.z / CELL) * CELL,
+      );
 
       // The flashlight wavers in the hand, dims through breakdowns and stutters in build-ups.
       const intensity = look.intensity;
       let beam = (style === "break" ? 0.75 : 1) * (0.85 + level * 0.25);
-      if (style === "build" && Math.sin(clock * 37) + Math.sin(clock * 61) > 1.75) beam *= 0.25;
+      if (style === "build") beam *= 1 - dance.kick * 0.12 * danceAmount;
       flashlight.intensity = 7 * intensity * beam * effects.light;
-      flashlight.target.position.set(Math.sin(clock * 0.7) * 0.4, -0.6 + Math.sin(clock * 1.1) * 0.15, -6);
+      flashlight.target.position.set(
+        Math.sin(clock * 0.7) * 0.4,
+        -0.6 + Math.sin(clock * 1.1) * 0.15,
+        -6,
+      );
       lightning *= Math.exp(-dt * 2.5);
-      const strike = lightning > 0.02 && Math.sin(clock * 50) > -0.2 ? lightning : 0;
-      moon.intensity = (0.35 + strike * 4) * intensity;
-      hemisphere.intensity = (0.6 + strike * 1.5) * intensity * (effects.light === 0 ? 0.25 : 1);
+      const strike = reduced.matches ? 0 : lightning;
+      moon.intensity = (0.6 + strike * 4) * intensity;
+      lanternLight.intensity = effects.light === 0 ? 0 : 1.8 * intensity;
+      hemisphere.intensity = (0.85 + strike * 1.5) * intensity * (effects.light === 0 ? 0.25 : 1);
       skyMaterial.uniforms.time!.value = clock;
       skyMaterial.uniforms.flash!.value = strike;
 
       cornUniforms.time.value = clock;
       cornUniforms.gust.value = low * intensity;
-      cornUniforms.rustle.value += (effects.rustle - cornUniforms.rustle.value) * (1 - Math.exp(-dt * 6));
-      faceMaterial.color.setHex(0xff9a1a).multiplyScalar(2 + Math.sin(clock * 9) * 0.3 + level * 0.8);
+      cornUniforms.groove.value
+        .set(dance.sway, dance.bounce, dance.kick, dance.tap)
+        .multiplyScalar(Math.min(1.5, danceAmount) * Math.min(1.5, intensity));
+      cornUniforms.rustle.value +=
+        (effects.rustle - cornUniforms.rustle.value) * (1 - Math.exp(-dt * 6));
+      faceMaterial.color
+        .setHex(0xff9a1a)
+        .multiplyScalar(2 + (dance.kick * 0.5 + dance.tap * 0.2) * danceAmount + level * 0.8);
 
       // Mist drifts slowly and wraps around the walker.
       mistSeeds.forEach((seed, i) => {
         seed.x += seed.speed * dt;
-        const x = THREE.MathUtils.euclideanModulo(seed.x - camera.position.x + 15, 30) - 15 + camera.position.x;
-        const z = THREE.MathUtils.euclideanModulo(seed.z - camera.position.z + 15, 30) - 15 + camera.position.z;
+        const x =
+          THREE.MathUtils.euclideanModulo(seed.x - camera.position.x + 15, 30) -
+          15 +
+          camera.position.x;
+        const z =
+          THREE.MathUtils.euclideanModulo(seed.z - camera.position.z + 15, 30) -
+          15 +
+          camera.position.z;
         mistPosition.setXYZ(i, x, seed.y + Math.sin(clock * 0.3 + i) * 0.1, z);
       });
       mistPosition.needsUpdate = true;

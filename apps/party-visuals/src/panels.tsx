@@ -2,8 +2,9 @@ import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { waveformBeat } from "../../dj-monitor/src/waveform-signal.js";
 import { trackLabel, type LibraryTrack, type PreviewDeck } from "./decks.js";
 import type { Mode } from "./App.js";
-import { SCENES, sceneInfo, type SceneId } from "./scenes.js";
+import { SCENE_DESCRIPTIONS, sceneInfo, type SceneId } from "./scenes.js";
 import { INTROS, LOOK_PARAMS, THEMES, thumbUrl, type Design } from "./show.js";
+import { SceneGallery, scenePreviewUrl } from "./scene-controls.js";
 
 const wrap = (i: number, n: number) => ((i % n) + n) % n;
 const clock = (seconds: number) =>
@@ -13,11 +14,7 @@ const clock = (seconds: number) =>
 
 function Thumb({ design }: { design: Design }) {
   const url = thumbUrl(design);
-  return url ? (
-    <img src={url} alt="" loading="lazy" />
-  ) : (
-    <span className="thumb-empty">{sceneInfo(design.scene).label}</span>
-  );
+  return <img src={url ?? scenePreviewUrl(design.scene)} alt="" loading="lazy" />;
 }
 
 /** Keep the highlighted row or card in view while navigating with the keyboard. */
@@ -60,7 +57,10 @@ export function LibraryOverlay({
     `${d.name} ${sceneInfo(d.scene).label}`.toLowerCase().includes(query.toLowerCase()),
   );
   const [index, setIndex] = useState(() =>
-    Math.max(0, designs.findIndex((d) => d.id === selectedId)),
+    Math.max(
+      0,
+      designs.findIndex((d) => d.id === selectedId),
+    ),
   );
   const columns = 4;
   const current = Math.min(index, Math.max(0, shown.length - 1));
@@ -126,40 +126,63 @@ export function LibraryOverlay({
 export function ScenePicker({
   onPick,
   onClose,
+  selected,
 }: {
   onPick: (scene: SceneId) => void;
   onClose: () => void;
+  selected?: SceneId;
 }) {
-  const [index, setIndex] = useState(0);
+  const dialog = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    const listener = (event: globalThis.KeyboardEvent) => {
-      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-        event.preventDefault();
-        setIndex((i) => wrap(i + (event.key === "ArrowDown" ? 1 : -1), SCENES.length));
-      } else if (event.key === "Enter") setIndex((i) => (onPick(SCENES[i]!.id), i));
-      else if (/^[1-9]$/u.test(event.key) && SCENES[Number(event.key) - 1])
-        onPick(SCENES[Number(event.key) - 1]!.id);
-      else if (event.key === "Escape") onClose();
+    const previous = document.activeElement as HTMLElement | null;
+    dialog.current?.querySelector<HTMLButtonElement>("button")?.focus();
+    return () => {
+      if (previous?.isConnected) previous.focus();
     };
-    window.addEventListener("keydown", listener);
-    return () => window.removeEventListener("keydown", listener);
-  }, [onPick, onClose]);
+  }, []);
   return (
-    <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="sheet list-sheet">
-        <h2>New design from scene</h2>
-        {SCENES.map((scene, i) => (
-          <button
-            key={scene.id}
-            className={`list-row ${i === index ? "highlighted" : ""}`}
-            onMouseEnter={() => setIndex(i)}
-            onClick={() => onPick(scene.id)}
-          >
-            <kbd>{i + 1}</kbd>
-            {scene.label}
-            {scene.looks ? <small>themes + sliders</small> : null}
+    <div
+      className="overlay"
+      onMouseDown={(event) => event.target === event.currentTarget && onClose()}
+    >
+      <div
+        ref={dialog}
+        className="sheet scene-gallery-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Choose a game or visual"
+        onKeyDown={(event) => {
+          event.stopPropagation();
+          if (event.key === "Escape") {
+            event.preventDefault();
+            onClose();
+          }
+          if (event.key === "Tab") {
+            const buttons = [
+              ...event.currentTarget.querySelectorAll<HTMLButtonElement>("button:not(:disabled)"),
+            ];
+            const first = buttons[0],
+              last = buttons.at(-1);
+            if (event.shiftKey && document.activeElement === first) {
+              event.preventDefault();
+              last?.focus();
+            } else if (!event.shiftKey && document.activeElement === last) {
+              event.preventDefault();
+              first?.focus();
+            }
+          }
+        }}
+      >
+        <header className="scene-controls-heading">
+          <div>
+            <h2>Choose a game or visual</h2>
+            <p>Explore the midnight collection.</p>
+          </div>
+          <button onClick={onClose} aria-label="Close scene gallery">
+            ✕
           </button>
-        ))}
+        </header>
+        <SceneGallery selected={selected} onSelect={onPick} selectedLabel="Selected" />
       </div>
     </div>
   );
@@ -181,7 +204,10 @@ export function SongSearch({
   const [playlists, setPlaylists] = useState<Playlist[]>([ALL_SONGS]);
   const [playlistId, setPlaylistId] = useState(rememberedPlaylist);
   const list = useScrollIntoView(index);
-  const tabs = useScrollIntoView(playlists.findIndex((p) => p.id === playlistId), "data-tab");
+  const tabs = useScrollIntoView(
+    playlists.findIndex((p) => p.id === playlistId),
+    "data-tab",
+  );
   useEffect(() => {
     fetch("/api/playlists")
       .then((r) => r.json() as Promise<{ items: Playlist[] }>)
@@ -191,8 +217,8 @@ export function SongSearch({
           .sort((a, b) => a.name.localeCompare(b.name));
         setPlaylists([ALL_SONGS, ...found]);
         // Default to the Halloween set until a playlist has been chosen.
-        setPlaylistId((current) =>
-          current || (found.find((p) => p.name === "halloween-end")?.id ?? ""),
+        setPlaylistId(
+          (current) => current || (found.find((p) => p.name === "halloween-end")?.id ?? ""),
         );
       })
       .catch(() => {});
@@ -222,12 +248,16 @@ export function SongSearch({
         })
         .then((data) => {
           setTracks(data.items);
-          setIndex(Math.max(0, data.items.findIndex((t) => t.fileExists)));
+          setIndex(
+            Math.max(
+              0,
+              data.items.findIndex((t) => t.fileExists),
+            ),
+          );
           setStatus(data.items.length ? "" : "No analyzed tracks match.");
         })
         .catch((e: unknown) => {
-          if (!abort.signal.aborted)
-            setStatus(`${String(e)} — is the workbench running on :4179?`);
+          if (!abort.signal.aborted) setStatus(`${String(e)} — is the workbench running on :4179?`);
         });
     }, 150);
     return () => {
@@ -238,7 +268,8 @@ export function SongSearch({
   const onKey = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
-      if (tracks.length) setIndex((i) => wrap(i + (event.key === "ArrowDown" ? 1 : -1), tracks.length));
+      if (tracks.length)
+        setIndex((i) => wrap(i + (event.key === "ArrowDown" ? 1 : -1), tracks.length));
     } else if (event.key === "Tab") {
       event.preventDefault();
       const at = playlists.findIndex((p) => p.id === playlistId);
@@ -283,7 +314,9 @@ export function SongSearch({
             >
               <span className="song-title">{trackLabel(track)}</span>
               <span className="song-artist">{track.artist}</span>
-              <small>{track.fileExists ? `${track.bpm?.toFixed(0) ?? "–"} BPM` : "file missing"}</small>
+              <small>
+                {track.fileExists ? `${track.bpm?.toFixed(0) ?? "–"} BPM` : "file missing"}
+              </small>
             </button>
           ))}
           {status ? <p className="empty">{status}</p> : null}
@@ -318,11 +351,12 @@ export function Inspector({
 }) {
   const scene = sceneInfo(design.scene);
   const url = thumbUrl(design);
+  const [pickingScene, setPickingScene] = useState(false);
   return (
     <aside className="inspector">
       <div className="inspector-head">
         <span className="inspector-thumb">
-          {url ? <img src={url} alt="" /> : <span className="thumb-empty">No snippet</span>}
+          <img src={url ?? scenePreviewUrl(design.scene)} alt="" />
         </span>
         {renaming ? (
           <input
@@ -346,17 +380,27 @@ export function Inspector({
       </div>
 
       <Field label="Scene" hint="[ ]">
-        <select
-          value={design.scene}
-          onChange={(e) => onChange({ scene: e.target.value as SceneId, thumbAt: undefined })}
-        >
-          {SCENES.map((s) => (
-            <option key={s.id} value={s.id}>
-              {s.label}
-            </option>
-          ))}
-        </select>
+        <button className="inspector-scene-button" onClick={() => setPickingScene(true)}>
+          <img src={scenePreviewUrl(design.scene)} alt="" />
+          <span>
+            {scene.label}
+            <small>Choose a game or visual</small>
+          </span>
+          <span aria-hidden="true">↗</span>
+        </button>
       </Field>
+      {pickingScene ? (
+        <ScenePicker
+          selected={design.scene}
+          onPick={(next) => {
+            onChange({ scene: next, thumbAt: undefined });
+            setPickingScene(false);
+          }}
+          onClose={() => setPickingScene(false)}
+        />
+      ) : null}
+
+      <p className="note">{SCENE_DESCRIPTIONS[design.scene]}</p>
 
       <Field label="Theme" hint="T">
         <div className="chips">
@@ -376,7 +420,7 @@ export function Inspector({
       {LOOK_PARAMS.map((spec, i) => (
         <div
           key={spec.key}
-          className={`slider ${i === param ? "focused" : ""} ${scene.looks ? "" : "disabled"}`}
+          className={`slider ${i === param ? "focused" : ""}`}
           onMouseDown={() => onParam(i)}
         >
           <span>
@@ -388,7 +432,7 @@ export function Inspector({
             min={0}
             max={spec.max}
             step={spec.max / 40}
-            disabled={!scene.looks}
+            aria-label={spec.label}
             value={design.look[spec.key]}
             onChange={(e) =>
               onChange({ look: { ...design.look, [spec.key]: Number(e.target.value) } })
@@ -397,7 +441,9 @@ export function Inspector({
           <output>{design.look[spec.key].toFixed(2)}</output>
         </div>
       ))}
-      {!scene.looks ? <p className="note">{scene.label} has no settings yet.</p> : null}
+      {!scene.looks ? (
+        <p className="note">These controls shape the atmospheric lighting around {scene.label}.</p>
+      ) : null}
 
       <Field label="Intro" hint="I">
         <div className="chips">
@@ -425,7 +471,15 @@ export function Inspector({
   );
 }
 
-function Field({ label, hint, children }: { label: string; hint: string; children: React.ReactNode }) {
+function Field({
+  label,
+  hint,
+  children,
+}: {
+  label: string;
+  hint: string;
+  children: React.ReactNode;
+}) {
   return (
     <div className="field">
       <span>
@@ -454,7 +508,7 @@ export function DeckBar({
       {decks.map((deck, i) => {
         const position = deck.audio.currentTime;
         const duration = deck.audio.duration;
-        const beat = Math.floor(waveformBeat(deck.waveform, position, deck.bpm));
+        const beat = Math.floor(waveformBeat(deck.waveform, position, deck.sourceBpm));
         return (
           <div key={i} className={`deck ${deck.playing ? "playing" : ""}`}>
             <button className="deck-name" onClick={() => onSearch(i)}>
@@ -507,6 +561,7 @@ export function DeckBar({
 
 const SHORTCUTS: Record<Mode, [string, string][]> = {
   build: [
+    ["V", "Show or hide live decks"],
     ["Tab", "Switch to Play"],
     ["L", "Design library"],
     ["↑ ↓", "Previous / next design"],
@@ -528,6 +583,7 @@ const SHORTCUTS: Record<Mode, [string, string][]> = {
     [", .", "Deck A back / forward 10s"],
   ],
   play: [
+    ["V", "Show or hide live decks"],
     ["Tab", "Back to Build"],
     ["← →", "Previous / next design"],
     ["1–9", "Jump to design"],

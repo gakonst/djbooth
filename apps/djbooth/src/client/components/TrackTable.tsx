@@ -78,6 +78,49 @@ export function TrackTable({
     placement: "before" | "after";
   }>();
   const canReorder = ordered && canWrite && Boolean(onMove);
+  const selectionScope = items
+    .map((track) => `${track.id}:${track.playlistMembershipId ?? ""}`)
+    .join("|");
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(
+    () => new Set(selectedTrackId ? [selectedTrackId] : []),
+  );
+  const anchorId = useRef<string | null>(selectedTrackId);
+  useEffect(() => {
+    setSelectedIds(new Set(selectedTrackId ? [selectedTrackId] : []));
+    anchorId.current = selectedTrackId;
+  }, [selectionScope, selectedTrackId]);
+
+  const selectRow = (
+    track: TrackSummary,
+    modifiers: { shiftKey: boolean; metaKey: boolean; ctrlKey: boolean },
+  ) => {
+    if (modifiers.shiftKey && anchorId.current) {
+      const anchor = items.findIndex((item) => item.id === anchorId.current);
+      const target = items.findIndex((item) => item.id === track.id);
+      if (anchor >= 0 && target >= 0) {
+        const range = items
+          .slice(Math.min(anchor, target), Math.max(anchor, target) + 1)
+          .map((item) => item.id);
+        setSelectedIds(
+          (current) =>
+            new Set(modifiers.metaKey || modifiers.ctrlKey ? [...current, ...range] : range),
+        );
+        return;
+      }
+    }
+    anchorId.current = track.id;
+    if (modifiers.metaKey || modifiers.ctrlKey) {
+      setSelectedIds((current) => {
+        const next = new Set(current);
+        if (next.has(track.id)) next.delete(track.id);
+        else next.add(track.id);
+        return next;
+      });
+      return;
+    }
+    setSelectedIds(new Set([track.id]));
+    onSelect(track);
+  };
 
   return (
     <section className="track-table-shell" aria-label="Tracks">
@@ -152,7 +195,7 @@ export function TrackTable({
               </tr>
             ) : (
               items.map((track, index) => {
-                const selected = track.id === selectedTrackId;
+                const selected = selectedIds.has(track.id);
                 const trackNumber = track.trackNumber ?? offset + index + 1;
                 return (
                   <tr
@@ -168,7 +211,7 @@ export function TrackTable({
                     aria-selected={selected}
                     tabIndex={0}
                     draggable
-                    onClick={() => onSelect(track)}
+                    onClick={(event) => selectRow(track, event)}
                     onDoubleClick={() => onActivate?.(track)}
                     onContextMenu={(event) => {
                       event.preventDefault();
@@ -179,12 +222,26 @@ export function TrackTable({
                       );
                     }}
                     onDragStart={(event) => {
-                      const ids = JSON.stringify([track.id]);
-                      event.dataTransfer.effectAllowed = canReorder ? "copyMove" : "copy";
+                      const draggedIds = selectedIds.has(track.id)
+                        ? [
+                            ...new Set(
+                              items
+                                .filter((item) => selectedIds.has(item.id))
+                                .map((item) => item.id),
+                            ),
+                          ]
+                        : [track.id];
+                      if (!selectedIds.has(track.id)) {
+                        setSelectedIds(new Set([track.id]));
+                        anchorId.current = track.id;
+                      }
+                      const ids = JSON.stringify(draggedIds);
+                      event.dataTransfer.effectAllowed =
+                        canReorder && draggedIds.length === 1 ? "copyMove" : "copy";
                       event.dataTransfer.setData("application/x-rekordbox-track-ids", ids);
                       event.dataTransfer.setData("application/x-rekordbox-track-id", track.id);
                       event.dataTransfer.setData("text/plain", track.id);
-                      if (canReorder && track.playlistMembershipId) {
+                      if (canReorder && draggedIds.length === 1 && track.playlistMembershipId) {
                         event.dataTransfer.setData(
                           "application/x-rekordbox-playlist-membership-id",
                           track.playlistMembershipId,
@@ -241,6 +298,7 @@ export function TrackTable({
                       setDropTarget(undefined);
                     }}
                     onKeyDown={(event) => {
+                      if (event.target !== event.currentTarget) return;
                       if (event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey)) {
                         event.preventDefault();
                         const bounds = event.currentTarget.getBoundingClientRect();
@@ -269,11 +327,25 @@ export function TrackTable({
                       }
                       if (event.key === "Enter" || event.key === " ") {
                         event.preventDefault();
-                        onSelect(track);
+                        selectRow(track, event);
                       }
                     }}
                   >
-                    <td className="track-number-column numeric muted-cell">{trackNumber}</td>
+                    <td className="track-number-column numeric muted-cell">
+                      <label style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                        <input
+                          type="checkbox"
+                          checked={selected}
+                          aria-label={`Select ${track.title || "Untitled"}`}
+                          title="Select tracks · Shift-click rows for a range · Ctrl/Cmd-click to toggle"
+                          onClick={(event) => event.stopPropagation()}
+                          onChange={() =>
+                            selectRow(track, { shiftKey: false, metaKey: true, ctrlKey: false })
+                          }
+                        />
+                        <span>{trackNumber}</span>
+                      </label>
+                    </td>
                     <td className="title-column">
                       <div className="track-title-cell">
                         {track.hosted && !track.hosted.localContentId ? (

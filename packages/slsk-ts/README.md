@@ -19,7 +19,6 @@ The package implements the complete known Soulseek wire surface: server, peer-in
 - Incremental bounded frame decoding, backpressure-aware writes, and compressed-message limits
 - All known server, peer, peer-init, and distributed message codes
 - Incur CLI with TOON/JSON/YAML/Markdown/JSONL output, schemas, completions, and MCP
-- Client library at 100% statement, branch, function, and line coverage
 
 ## Install
 
@@ -168,15 +167,9 @@ Cli.create('music').command(slskCli)
 gh repo clone gakonst/djbooth
 cd djbooth
 pnpm install
-pnpm --filter slsk-ts check             # types + lint + 100% coverage
+pnpm --filter slsk-ts check             # types + lint
 pnpm --filter slsk-ts build
 pnpm --filter slsk-ts bench
-```
-
-The live test is opt-in and never stores credentials:
-
-```sh
-SLSK_E2E_USERNAME=... SLSK_E2E_PASSWORD=... pnpm --filter slsk-ts test:e2e
 ```
 
 ## Performance and safety

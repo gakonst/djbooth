@@ -1,17 +1,21 @@
 import type { TrackRhythm } from "../../djbooth/src/shared/types.js";
 import type { TrackWaveform } from "../../dj-monitor/src/types.js";
 import type { VisualLook } from "../../dj-monitor/src/visual-presets.js";
+import type { MusicDance } from "../../dj-monitor/src/music-dance.js";
 
 /** What a deck is playing, for scenes that follow a song's structure rather than its beat. */
 export type MusicLane = {
   trackId: string | null;
   waveform: TrackWaveform | null;
-  /** Playhead in seconds. */
+  /** Playhead in source-file seconds, already advanced by playback speed. */
   time: number;
   playing: boolean;
   /** Audible level after the fader, about 0–1. */
   level: number;
+  /** Audible tempo, including playback speed. */
   bpm: number;
+  /** Original track tempo, used with source-file timestamps when no beat grid is available. */
+  sourceBpm?: number;
   /** Live analyser magnitudes (0–255 per bin), zero while the deck is silent. */
   spectrum?: Uint8Array;
   sampleRate?: number;
@@ -24,6 +28,7 @@ export type SceneEngine = {
   dispose(): void;
   setLook?(look: VisualLook): void;
   setMusic?(lanes: MusicLane[]): void;
+  setDance?(dance: MusicDance): void;
   /** A short description of what the scene is reacting to, shown while building. */
   status?(): string;
   draw(
@@ -37,21 +42,13 @@ export type SceneEngine = {
 };
 
 export type SceneId =
+  | "ritual-cathedral"
   | "halloween"
   | "race"
   | "temple-run"
-  | "temple-run-booth"
-  | "vgpu"
-  | "webgpu"
-  | "ribbons"
-  | "architecture"
-  | "lines"
   | "dither"
   | "rainbow-road"
-  | "infinite-rings"
   | "corn-maze"
-  | "infinite-vinyl"
-  | "infinite-eyes"
   | "pac-man"
   | "jungle-hero"
   | "skeleton-disco";
@@ -66,20 +63,15 @@ export type SceneInfo = {
   create(host: HTMLCanvasElement): Promise<SceneEngine>;
 };
 
-/** The spark scene reads its composition from the URL once, while it is created. */
-async function withComposition<T>(composition: string, create: () => Promise<T>) {
-  const original = location.href;
-  const url = new URL(original);
-  url.searchParams.set("composition", composition);
-  history.replaceState(history.state, "", url);
-  try {
-    return await create();
-  } finally {
-    history.replaceState(history.state, "", original);
-  }
-}
-
 export const SCENES: SceneInfo[] = [
+  {
+    id: "ritual-cathedral",
+    label: "Ritual cathedral",
+    looks: true,
+    themes: false,
+    create: async (host) =>
+      (await import("./scenes/ritual-cathedral.js")).createRitualCathedral(host),
+  },
   {
     id: "corn-maze",
     label: "Corn maze",
@@ -95,34 +87,11 @@ export const SCENES: SceneInfo[] = [
     create: async (host) => (await import("./scenes/rainbow-road.js")).createRainbowRoad(host),
   },
   {
-    id: "infinite-rings",
-    label: "Infinite rings",
-    looks: true,
-    themes: false,
-    create: async (host) => (await import("./scenes/infinite-rings.js")).createInfiniteRings(host),
-  },
-  {
     id: "pac-man",
     label: "Pac-Man",
     looks: true,
     themes: false,
     create: async (host) => (await import("./scenes/pac-man.js")).createPacMan(host),
-  },
-  {
-    id: "infinite-vinyl",
-    label: "Vinyl tunnel",
-    looks: true,
-    themes: false,
-    create: async (host) =>
-      (await import("./scenes/infinite-rings.js")).createInfiniteRings(host, "vinyl"),
-  },
-  {
-    id: "infinite-eyes",
-    label: "Eye tunnel",
-    looks: true,
-    themes: false,
-    create: async (host) =>
-      (await import("./scenes/infinite-rings.js")).createInfiniteRings(host, "eyes"),
   },
   {
     id: "jungle-hero",
@@ -149,6 +118,7 @@ export const SCENES: SceneInfo[] = [
     id: "race",
     label: "Space race",
     looks: true,
+    themes: false,
     create: async (host) =>
       (await import("../../dj-monitor/src/race-booth.js")).createRaceBooth(host),
   },
@@ -160,56 +130,25 @@ export const SCENES: SceneInfo[] = [
     create: async (host) => (await import("./scenes/temple-run.js")).createTempleRun(host),
   },
   {
-    id: "temple-run-booth",
-    label: "Temple run (booth)",
-    looks: true,
-    create: async (host) =>
-      (await import("../../dj-monitor/src/temple-run-booth.js")).createTempleRunBooth(host),
-  },
-  {
-    id: "vgpu",
-    label: "Prism glass",
-    looks: false,
-    create: async (host) =>
-      (await import("../../dj-monitor/src/vgpu-booth.js")).createVgpuBooth(host),
-  },
-  {
-    id: "webgpu",
-    label: "Folded surface",
-    looks: false,
-    create: async (host) =>
-      (await import("../../dj-monitor/src/webgpu-booth.js")).createWebGPUBooth(host),
-  },
-  {
-    id: "ribbons",
-    label: "Ribbons",
-    looks: false,
-    create: async (host) =>
-      withComposition("", async () =>
-        (await import("../../dj-monitor/src/spark-booth.js")).createSparkBooth(host),
-      ),
-  },
-  {
-    id: "architecture",
-    label: "Architecture",
-    looks: false,
-    create: async (host) =>
-      withComposition("architecture", async () =>
-        (await import("../../dj-monitor/src/spark-booth.js")).createSparkBooth(host),
-      ),
-  },
-  {
-    id: "lines",
-    label: "Line waves",
-    looks: false,
-    create: async (host) => (await import("./ported/lines-booth.js")).createLinesBooth(host),
-  },
-  {
     id: "dither",
     label: "Dither knot",
-    looks: false,
+    looks: true,
+    themes: false,
     create: async (host) => (await import("./ported/dither-booth.js")).createDitherBooth(host),
   },
 ];
 
 export const sceneInfo = (id: SceneId) => SCENES.find((scene) => scene.id === id) ?? SCENES[0]!;
+
+export const SCENE_DESCRIPTIONS: Record<SceneId, string> = {
+  "ritual-cathedral": "Travel through stained glass, candlelight and a dancing ritual.",
+  halloween: "Dancing spirits inside an amber spectral vortex.",
+  race: "Pumpkin racers and spectral trails in haunted space.",
+  "temple-run": "A torchlit escape through engraved moonlit ruins.",
+  dither: "A carved, candlelit pumpkin with an etched halo.",
+  "rainbow-road": "A Halloween race on a haunted spectral highway.",
+  "corn-maze": "Follow a lantern into the haunted harvest.",
+  "pac-man": "A pumpkin pursuit through cracked neon masonry.",
+  "jungle-hero": "Hard-mode riffs through a haunted pumpkin grove.",
+  "skeleton-disco": "Articulated dancers in a candlelit disco crypt.",
+};

@@ -1,8 +1,9 @@
+import { createDanceMotion, type MusicDance } from "../../../dj-monitor/src/music-dance.js";
 import { DEFAULT_VISUAL_LOOK, type VisualLook } from "../../../dj-monitor/src/visual-presets.js";
 import { waveformBeat } from "../../../dj-monitor/src/waveform-signal.js";
 import type { MusicLane, SceneEngine } from "../scenes.js";
 
-/** One colour behind every dancer for now. */
+/** Candlelight accents in the vaulted dance crypt. */
 const TILE_COLOR = "#ff7a1a";
 const BONE = "#f6f1e4";
 const INK = "#1c0d02";
@@ -338,8 +339,7 @@ function skeleton(pose: Pose) {
   };
 }
 
-/** `pixels` is the tile size on screen; canvas shadows ignore the transform. */
-function drawDancer(c: CanvasRenderingContext2D, pose: Pose, glow: number, pixels: number) {
+function drawDancer(c: CanvasRenderingContext2D, pose: Pose, glow: number) {
   const s = skeleton(pose);
   const line = (a: Point, b: Point, width: number) => {
     c.lineWidth = width;
@@ -376,15 +376,32 @@ function drawDancer(c: CanvasRenderingContext2D, pose: Pose, glow: number, pixel
   c.ellipse(pose.pelvis[0], FLOOR + 0.012, 0.15, 0.022, 0, 0, Math.PI * 2);
   c.fill();
 
+  // One soft pool behind the torso replaces a blur for every individual bone.
+  const halo = c.createRadialGradient(
+    s.chest[0],
+    s.chest[1] + 0.1,
+    0.04,
+    s.chest[0],
+    s.chest[1] + 0.1,
+    0.43,
+  );
+  halo.addColorStop(0, `rgba(197,151,103,${0.055 + Math.min(1, glow) * 0.1})`);
+  halo.addColorStop(1, "rgba(197,151,103,0)");
+  c.fillStyle = halo;
+  c.fillRect(s.chest[0] - 0.43, s.chest[1] - 0.33, 0.86, 0.86);
+
   c.lineCap = "round";
   c.lineJoin = "round";
   // Two passes: a dark outline under every bone, then the bones themselves.
   for (const pass of [0, 1]) {
     const pad = pass ? 0 : 0.014;
-    c.strokeStyle = c.fillStyle = pass ? BONE : INK;
-    // The glow sits behind the outline, so it rims the figure.
-    c.shadowColor = `rgba(255,250,220,${Math.min(0.9, glow)})`;
-    c.shadowBlur = pass || glow <= 0 ? 0 : pixels * 0.05 * glow;
+    const ivory = c.createLinearGradient(-0.12, -0.3, 0.12, 0.4);
+    ivory.addColorStop(0, "#fff2ce");
+    ivory.addColorStop(0.35, BONE);
+    ivory.addColorStop(0.7, "#a99780");
+    ivory.addColorStop(1, "#66556b");
+    c.strokeStyle = c.fillStyle = pass ? ivory : INK;
+    c.shadowBlur = 0;
 
     // Spine, collarbones and pelvis.
     line(s.pelvis, s.neck, 0.016 + pad);
@@ -448,6 +465,31 @@ function drawDancer(c: CanvasRenderingContext2D, pose: Pose, glow: number, pixel
   }
   c.shadowBlur = 0;
 
+  // Fine cool edge highlights model the bones without washing out their outlines.
+  c.strokeStyle = "rgba(222,226,230,0.45)";
+  for (const [a, b] of limbs) line([a[0] - 0.005, a[1]], [b[0] - 0.005, b[1]], 0.003);
+
+  // Fine marrow seams, paired forearm bones and articulated fingers.
+  c.strokeStyle = "#82715f";
+  for (const [a, b, width] of limbs) line(a, b, width * 0.14);
+  c.fillStyle = "#e8dcc1";
+  for (let k = 0; k < 9; k++) {
+    const t = k / 9;
+    knob(mixPoint(s.pelvis, s.neck, t), 0.009);
+  }
+  c.strokeStyle = "#d6c4a0";
+  for (const [hand, side] of [
+    [s.hands[0], -1],
+    [s.hands[1], 1],
+  ] as const) {
+    for (let finger = 0; finger < 4; finger++) {
+      const a: Point = [hand[0] + (finger - 1.5) * 0.007, hand[1]];
+      const b: Point = [a[0] + side * 0.012, a[1] + 0.025 + Math.sin(finger) * 0.009];
+      line(a, b, 0.004);
+      knob(mixPoint(a, b, 0.55), 0.003);
+    }
+  }
+
   // Face: hollow eyes with a glint, a nose and a row of teeth.
   c.save();
   c.translate(s.head[0], s.head[1]);
@@ -481,7 +523,106 @@ function drawDancer(c: CanvasRenderingContext2D, pose: Pose, glow: number, pixel
     c.lineTo(k * 0.011, 0.056);
   }
   c.stroke();
+  // Hairline fracture and raised brow ridges in aged ivory.
+  c.strokeStyle = "#94826b";
+  c.lineWidth = 0.002;
+  c.beginPath();
+  c.moveTo(0.006, -0.067);
+  c.lineTo(-0.005, -0.045);
+  c.lineTo(0.006, -0.035);
+  c.lineTo(0, -0.021);
+  c.stroke();
+  c.strokeStyle = "#fff2d7";
+  c.lineWidth = 0.005;
+  for (const side of [-1, 1]) {
+    c.beginPath();
+    c.moveTo(side * 0.008, -0.027);
+    c.lineTo(side * 0.039, -0.03);
+    c.stroke();
+  }
   c.restore();
+}
+
+function drawCrypt(c: CanvasRenderingContext2D, w: number, h: number, accent: number) {
+  const wall = c.createLinearGradient(0, 0, w, h);
+  wall.addColorStop(0, "#24172f");
+  wall.addColorStop(0.5, "#090c17");
+  wall.addColorStop(1, "#302017");
+  c.fillStyle = wall;
+  c.fillRect(0, 0, w, h);
+  c.lineWidth = 1;
+  for (let row = 0; row < 12; row++) {
+    const yy = (row * h) / 12;
+    c.strokeStyle = "#38303b";
+    c.beginPath();
+    c.moveTo(0, yy);
+    c.lineTo(w, yy);
+    c.stroke();
+    for (let col = 0; col < 5; col++) {
+      const xx = ((col - (row % 2) * 0.5) * w) / 4;
+      c.strokeStyle = "#080912";
+      c.beginPath();
+      c.moveTo(xx, yy);
+      c.lineTo(xx, yy + h / 12);
+      c.stroke();
+    }
+  }
+  // A pointed recess, concentric mouldings and brass keystone.
+  for (let layer = 3; layer >= 0; layer--) {
+    const inset = w * (0.12 + layer * 0.025);
+    c.beginPath();
+    c.moveTo(inset, h * 0.85);
+    c.lineTo(inset, h * 0.35);
+    c.quadraticCurveTo(inset, h * 0.19, w * 0.5, h * 0.055 + layer * h * 0.018);
+    c.quadraticCurveTo(w - inset, h * 0.19, w - inset, h * 0.35);
+    c.lineTo(w - inset, h * 0.85);
+    c.closePath();
+    c.fillStyle = layer % 2 ? "#39303f" : "#11111e";
+    c.fill();
+    c.strokeStyle = "#67505b";
+    c.lineWidth = 1;
+    c.stroke();
+  }
+  const light = c.createRadialGradient(w * 0.5, h * 0.42, 0, w * 0.5, h * 0.45, w * 0.58);
+  light.addColorStop(0, `rgba(110,73,141,${0.18 + accent * 0.06})`);
+  light.addColorStop(1, "rgba(19,15,30,0)");
+  c.fillStyle = light;
+  c.fillRect(0, 0, w, h);
+  // Perspective floor tiles.
+  c.fillStyle = "#14111b";
+  c.fillRect(0, h * 0.86, w, h * 0.14);
+  c.strokeStyle = "#57404b";
+  c.lineWidth = 0.8;
+  for (let k = -4; k <= 4; k++) {
+    c.beginPath();
+    c.moveTo(w * 0.5 + k * w * 0.06, h * 0.86);
+    c.lineTo(w * 0.5 + k * w * 0.2, h);
+    c.stroke();
+  }
+  for (const yy of [0.88, 0.92, 0.98]) {
+    c.beginPath();
+    c.moveTo(0, h * yy);
+    c.lineTo(w, h * yy);
+    c.stroke();
+  }
+  for (const side of [0.13, 0.87]) {
+    const x = w * side,
+      y = h * 0.66,
+      unit = Math.min(w, h);
+    const halo = c.createRadialGradient(x, y, 0, x, y, unit * 0.16);
+    halo.addColorStop(0, "#de7a2b55");
+    halo.addColorStop(1, "#de7a2b00");
+    c.fillStyle = halo;
+    c.fillRect(x - unit * 0.16, y - unit * 0.16, unit * 0.32, unit * 0.32);
+    c.fillStyle = "#796044";
+    c.fillRect(x - unit * 0.018, y + unit * 0.025, unit * 0.036, unit * 0.12);
+    c.fillStyle = "#dec69c";
+    c.fillRect(x - unit * 0.009, y, unit * 0.018, unit * 0.07);
+    c.fillStyle = "#ffd49a";
+    c.beginPath();
+    c.ellipse(x, y - unit * 0.012, unit * 0.008, unit * 0.02, 0.15, 0, Math.PI * 2);
+    c.fill();
+  }
 }
 
 type Rect = { x: number; y: number; w: number; h: number };
@@ -518,6 +659,9 @@ export async function createSkeletonDisco(host: HTMLCanvasElement): Promise<Scen
   element.setAttribute("aria-hidden", "true");
   host.after(element);
   const c = element.getContext("2d")!;
+  const crypt = document.createElement("canvas");
+  crypt.width = crypt.height = 768;
+  drawCrypt(crypt.getContext("2d")!, crypt.width, crypt.height, 0);
 
   let target: VisualLook = { ...DEFAULT_VISUAL_LOOK };
   const look = { ...target };
@@ -543,7 +687,8 @@ export async function createSkeletonDisco(host: HTMLCanvasElement): Promise<Scen
     w: width / columns,
     h: height / rows,
   });
-  const current = (tile: Tile) => lerpRect(tile.from, tile.to, ease((clock - reflowAt) / REFLOW));
+  const current = (tile: Tile) =>
+    lerpRect(tile.from, tile.to, reduced.matches ? 1 : ease((clock - reflowAt) / REFLOW));
 
   /** Make room for `count` dancers: columns grow at both sides, rows from the bottom. */
   const reflow = (count: number) => {
@@ -592,7 +737,12 @@ export async function createSkeletonDisco(host: HTMLCanvasElement): Promise<Scen
     return best;
   };
 
+  let suppliedDance: MusicDance | undefined;
+  const fallbackDance = createDanceMotion();
   return {
+    setDance(next) {
+      suppliedDance = next;
+    },
     setLook(next) {
       target = next;
     },
@@ -602,7 +752,7 @@ export async function createSkeletonDisco(host: HTMLCanvasElement): Promise<Scen
     status() {
       return statusText;
     },
-    draw(time) {
+    draw(time, _rgba, energy) {
       const bounds = host.getBoundingClientRect();
       const ratio = Math.min(devicePixelRatio, 2);
       const w = Math.max(1, bounds.width),
@@ -620,10 +770,22 @@ export async function createSkeletonDisco(host: HTMLCanvasElement): Promise<Scen
 
       // Dance only while music plays; when it stops they ease back to standing still.
       const lane = leader();
-      if (lane) beat = waveformBeat(lane.waveform, lane.time, lane.bpm);
+      if (lane) beat = waveformBeat(lane.waveform, lane.time, lane.sourceBpm ?? lane.bpm);
+      const band = lane ? lanes.indexOf(lane) * 4 : 0;
+      const dance =
+        suppliedDance ??
+        fallbackDance.update(
+          beat,
+          lane?.level ?? 0,
+          energy[band + 1] ?? lane?.level ?? 0,
+          energy[band + 2] ?? lane?.level ?? 0,
+          energy[band + 3] ?? 0,
+          dt,
+        );
+      if (dance.active) beat = dance.beat;
       level +=
         ((lane ? Math.min(1, Math.sqrt(lane.level) * 1.5) : 0) - level) * (1 - Math.exp(-dt * 4));
-      groove += ((lane ? 1 : 0) - groove) * (1 - Math.exp(-dt * (lane ? 3 : 4)));
+      groove += ((lane || dance.active ? 1 : 0) - groove) * (1 - Math.exp(-dt * (lane ? 3 : 4)));
 
       const whole = Math.floor(beat);
       if (whole !== lastWhole && lane) flash = 0.6 + level * 0.4;
@@ -651,9 +813,19 @@ export async function createSkeletonDisco(host: HTMLCanvasElement): Promise<Scen
       const move = moveAt(moveIndex);
       const before = moveAt(moveIndex - 1);
       const calm = reduced.matches ? 0.3 : 1;
-      const amount = Math.min(1.4, (0.65 + level * 0.35) * look.motion * calm) * groove;
+      const amount =
+        Math.min(1.4, (0.65 + level * 0.35) * look.motion * Math.max(0, look.intensity) * calm) *
+        groove;
       const danced = mixPose(before.pose(beat), move.pose(beat), smooth(into));
       const pose = mixPose(NEUTRAL, danced, amount);
+      const accent = reduced.matches ? 0 : Math.min(1.5, Math.max(0, look.motion * look.intensity));
+      // Weight shifts through the articulated skeleton; planted feet remain on the floor.
+      pose.pelvis[0] += dance.sway * 0.025 * accent;
+      pose.pelvis[1] -= dance.bounce * 0.026 * accent;
+      pose.tilt += dance.twist * 0.07 * accent;
+      pose.head += dance.nod * 0.13 * accent;
+      pose.left[1] -= dance.tap * 0.025 * accent;
+      pose.right[1] -= dance.kick * 0.03 * accent;
       const glow = flash * look.intensity;
 
       c.setTransform(1, 0, 0, 1, 0, 0);
@@ -668,15 +840,17 @@ export async function createSkeletonDisco(host: HTMLCanvasElement): Promise<Scen
         c.beginPath();
         c.rect(r.x, r.y, r.w, r.h);
         c.clip();
-        c.fillStyle = TILE_COLOR;
-        c.fillRect(r.x, r.y, r.w, r.h);
+        c.save();
+        c.translate(r.x, r.y);
+        c.drawImage(crypt, 0, 0, r.w, r.h);
+        c.restore();
         // The dancer keeps its proportions and stands on the bottom of its box.
         const size = Math.min(r.w * 1.3, r.h);
         c.translate(r.x + r.w / 2, r.y + r.h - size / 2);
         c.scale(size, size);
         // Neighbours mirror each other, like a dance line.
         if (tile.mirror) c.scale(-1, 1);
-        drawDancer(c, pose, glow, size * ratio);
+        drawDancer(c, pose, glow);
         c.restore();
         c.strokeStyle = INK;
         c.lineWidth = line;
@@ -687,6 +861,7 @@ export async function createSkeletonDisco(host: HTMLCanvasElement): Promise<Scen
     },
     dispose() {
       element.remove();
+      crypt.width = crypt.height = 0;
     },
   };
 }

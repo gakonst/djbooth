@@ -36,8 +36,8 @@ function percentile(values: number[], p: number) {
 function downbeats(waveform: TrackWaveform, bpm: number) {
   const grid = waveform.beatGrid ?? [];
   const bars = grid.filter((b) => b.beat === 1).map((b) => b.timeSeconds);
-  if (bars.length >= 8) return bars;
-  const bar = (4 * 60) / (bpm > 0 ? bpm : 120);
+  if (bars.length) return bars;
+  const bar = (4 * 60) / (Number.isFinite(bpm) && bpm > 0 ? bpm : 120);
   return Array.from({ length: Math.ceil(waveform.durationSeconds / bar) }, (_, i) => i * bar);
 }
 
@@ -169,7 +169,13 @@ export function idleSong(): SongMap {
   const energy: number[] = [];
   const sections: Section[] = [];
   const swirls: number[] = [];
-  const levels: Record<Style, number> = { break: 0.3, vocal: 0.6, groove: 0.7, build: 0.8, drop: 1 };
+  const levels: Record<Style, number> = {
+    break: 0.3,
+    vocal: 0.6,
+    groove: 0.7,
+    build: 0.8,
+    drop: 1,
+  };
   let t = 0;
   for (let round = 0; round < 6; round++)
     for (const [style, length] of plan) {

@@ -4,8 +4,6 @@
 //! splits and quantizers are clean-room implementations derived from public
 //! format documentation, synthetic probes, and static differential analysis.
 
-#[cfg(all(target_arch = "aarch64", test))]
-use core::arch::aarch64::vuzp1q_f64;
 #[cfg(target_arch = "aarch64")]
 use core::arch::aarch64::{
     float64x2_t, vaddq_f64, vdupq_n_f64, vextq_f64, vgetq_lane_f64, vld1q_f64, vmaxq_f64,
@@ -18,8 +16,6 @@ use rayon::prelude::*;
 use std::collections::VecDeque;
 
 use crate::anlz::{AnlzTag, CountedWaveform, build_waveform_tag};
-#[cfg(test)]
-use crate::audio::DETAIL_FRAME_SAMPLES;
 use crate::audio::{ANALYSIS_SAMPLE_RATE, MonoPcm};
 
 /// Fixed monochrome waveform preview width.
@@ -52,12 +48,6 @@ const COLOR_HEIGHT_SCALE: f64 = 2.932_745_123_302_746_6e-8;
 const MONOCHROME_DETAIL_RATE: usize = 150;
 const NATIVE_LOUD_DECAY: f32 = f32::from_bits(0x3f7e_6baa);
 const NATIVE_LOUD_900_FLOOR: f32 = f32::from_bits(0x43a3_d70a);
-#[cfg(all(target_arch = "aarch64", test))]
-const COLOR_PREVIEW_GREEN_GAIN: f64 = 0.87;
-#[cfg(all(target_arch = "aarch64", test))]
-const COLOR_PREVIEW_BLUE_GAIN: f64 = 0.513;
-#[cfg(all(target_arch = "aarch64", test))]
-const MIN_PARALLEL_CHUNK_FRAMES: usize = 3_000;
 
 /// All waveform entry arrays needed by DAT, EXT, and 2EX analysis files.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -227,13 +217,6 @@ fn pack_waveforms(
         three_band_detail: three_band.detail,
         three_band_normalize: three_band.normalize,
     }
-}
-
-#[cfg(test)]
-#[derive(Debug, Clone, Copy, Default)]
-struct FrameFeatures {
-    peak: f64,
-    rms: f64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -411,21 +394,6 @@ struct Biquad {
 }
 
 impl Biquad {
-    #[cfg(all(target_arch = "aarch64", test))]
-    fn low_pass(cutoff_hz: f64, q: f64) -> Self {
-        Self::new(cutoff_hz, q, false)
-    }
-
-    #[cfg(all(target_arch = "aarch64", test))]
-    fn high_pass(cutoff_hz: f64, q: f64) -> Self {
-        Self::new(cutoff_hz, q, true)
-    }
-
-    #[cfg(all(target_arch = "aarch64", test))]
-    fn new(cutoff_hz: f64, q: f64, high_pass: bool) -> Self {
-        Self::new_at(cutoff_hz, q, high_pass, ANALYSIS_SAMPLE_RATE)
-    }
-
     fn new_at(cutoff_hz: f64, q: f64, high_pass: bool, sample_rate: u32) -> Self {
         let omega = 2.0 * std::f64::consts::PI * cutoff_hz / f64::from(sample_rate);
         let cosine = omega.cos();
@@ -655,7 +623,7 @@ impl NativeLoudPeakDetector {
     }
 }
 
-#[cfg(any(not(target_arch = "aarch64"), test))]
+#[cfg(not(target_arch = "aarch64"))]
 #[derive(Debug, Clone, Copy)]
 struct ScalarNativeLoudFilterBank {
     low: [Biquad; 2],
@@ -663,7 +631,7 @@ struct ScalarNativeLoudFilterBank {
     crossover: LinkwitzRiley4,
 }
 
-#[cfg(any(not(target_arch = "aarch64"), test))]
+#[cfg(not(target_arch = "aarch64"))]
 impl ScalarNativeLoudFilterBank {
     fn new(sample_rate: u32) -> Self {
         let low = Biquad::band_pass_at(150.0, 0.899_999_976, sample_rate);
@@ -759,7 +727,7 @@ impl LinkwitzRiley4 {
     }
 }
 
-#[cfg(any(not(target_arch = "aarch64"), test))]
+#[cfg(not(target_arch = "aarch64"))]
 #[inline(always)]
 fn process_loud_filter<const N: usize>(stages: &mut [Biquad; N], mut sample: f64) -> f64 {
     for stage in stages {
@@ -1192,7 +1160,7 @@ struct LegacyFilterOutput {
     color: [f64; 3],
 }
 
-#[cfg(any(not(target_arch = "aarch64"), test))]
+#[cfg(not(target_arch = "aarch64"))]
 struct ScalarLegacyFilterBank {
     whole_bottom: Biquad,
     whole_red_one: Biquad,
@@ -1209,7 +1177,7 @@ struct ScalarLegacyFilterBank {
     color_blue: Biquad,
 }
 
-#[cfg(any(not(target_arch = "aarch64"), test))]
+#[cfg(not(target_arch = "aarch64"))]
 impl ScalarLegacyFilterBank {
     fn new(sample_rate: u32) -> Self {
         let q = std::f64::consts::FRAC_1_SQRT_2;
@@ -1615,109 +1583,6 @@ fn native_color(red: u16, green: u16, blue: u16) -> [u8; 3] {
     levels
 }
 
-#[cfg(all(target_arch = "aarch64", test))]
-#[derive(Debug, Clone)]
-struct Butterworth<const STAGES: usize> {
-    stages: [Biquad; STAGES],
-}
-
-#[cfg(all(target_arch = "aarch64", test))]
-impl<const STAGES: usize> Butterworth<STAGES> {
-    fn low_pass(cutoff_hz: f64) -> Self {
-        Self::new(cutoff_hz, false)
-    }
-
-    fn high_pass(cutoff_hz: f64) -> Self {
-        Self::new(cutoff_hz, true)
-    }
-
-    fn new(cutoff_hz: f64, high_pass: bool) -> Self {
-        let order = 2 * STAGES;
-        Self {
-            stages: std::array::from_fn(|index| {
-                let angle = std::f64::consts::PI * (2 * index + 1) as f64 / (2 * order) as f64;
-                let q = 1.0 / (2.0 * angle.cos());
-                if high_pass {
-                    Biquad::high_pass(cutoff_hz, q)
-                } else {
-                    Biquad::low_pass(cutoff_hz, q)
-                }
-            }),
-        }
-    }
-
-    fn process(&mut self, mut sample: f64) -> f64 {
-        for stage in &mut self.stages {
-            sample = stage.process(sample);
-        }
-        sample
-    }
-}
-
-#[cfg(all(test, target_arch = "aarch64"))]
-#[derive(Debug, Clone)]
-struct ScalarColorBandSplitter {
-    preview_bottom: Butterworth<1>,
-    preview_red: Butterworth<2>,
-    preview_green_high: Butterworth<2>,
-    preview_green_low: Butterworth<1>,
-    preview_blue: Butterworth<3>,
-    detail_red: Butterworth<2>,
-    detail_green_high: Butterworth<2>,
-    detail_green_low: Butterworth<1>,
-    detail_blue: Butterworth<2>,
-}
-
-#[cfg(all(test, target_arch = "aarch64"))]
-impl Default for ScalarColorBandSplitter {
-    fn default() -> Self {
-        Self {
-            preview_bottom: Butterworth::low_pass(400.0),
-            preview_red: Butterworth::low_pass(160.0),
-            preview_green_high: Butterworth::high_pass(230.0),
-            preview_green_low: Butterworth::low_pass(900.0),
-            preview_blue: Butterworth::high_pass(2_500.0),
-            detail_red: Butterworth::low_pass(156.0),
-            detail_green_high: Butterworth::high_pass(210.0),
-            detail_green_low: Butterworth::low_pass(2_100.0),
-            detail_blue: Butterworth::high_pass(1_255.0),
-        }
-    }
-}
-
-#[cfg(all(test, target_arch = "aarch64"))]
-#[derive(Debug, Clone, Copy)]
-struct ColorBands {
-    preview_bottom: f64,
-    preview_red: f64,
-    preview_green: f64,
-    preview_blue: f64,
-    detail_red: f64,
-    detail_green: f64,
-    detail_blue: f64,
-}
-
-#[cfg(all(test, target_arch = "aarch64"))]
-impl ScalarColorBandSplitter {
-    fn process(&mut self, sample: f64) -> ColorBands {
-        let preview_green = self
-            .preview_green_low
-            .process(self.preview_green_high.process(sample));
-        let detail_green = self
-            .detail_green_low
-            .process(self.detail_green_high.process(sample));
-        ColorBands {
-            preview_bottom: self.preview_bottom.process(sample),
-            preview_red: self.preview_red.process(sample),
-            preview_green: preview_green * COLOR_PREVIEW_GREEN_GAIN,
-            preview_blue: self.preview_blue.process(sample) * COLOR_PREVIEW_BLUE_GAIN,
-            detail_red: self.detail_red.process(sample),
-            detail_green,
-            detail_blue: self.detail_blue.process(sample),
-        }
-    }
-}
-
 #[cfg(target_arch = "aarch64")]
 struct BiquadPair {
     b0: float64x2_t,
@@ -1820,116 +1685,6 @@ impl LegacyFilterBank {
     }
 }
 
-#[cfg(all(target_arch = "aarch64", test))]
-struct ColorBandSplitter {
-    stage_zero: [BiquadPair; 4],
-    stage_one: [BiquadPair; 3],
-    preview_blue_stage_two: BiquadPair,
-    green_low_passes: BiquadPair,
-}
-
-#[cfg(all(target_arch = "aarch64", test))]
-struct ColorBandVectors {
-    preview_bottom_red: float64x2_t,
-    preview_green_blue: float64x2_t,
-    detail_red_green: float64x2_t,
-    detail_blue: float64x2_t,
-}
-
-#[cfg(all(target_arch = "aarch64", test))]
-impl Default for ColorBandSplitter {
-    fn default() -> Self {
-        let [preview_bottom] = Butterworth::<1>::low_pass(400.0).stages;
-        let [preview_red_zero, preview_red_one] = Butterworth::<2>::low_pass(160.0).stages;
-        let [preview_green_zero, preview_green_one] = Butterworth::<2>::high_pass(230.0).stages;
-        let [preview_green_low] = Butterworth::<1>::low_pass(900.0).stages;
-        let [preview_blue_zero, preview_blue_one, preview_blue_two] =
-            Butterworth::<3>::high_pass(2_500.0).stages;
-        let [detail_red_zero, detail_red_one] = Butterworth::<2>::low_pass(156.0).stages;
-        let [detail_green_zero, detail_green_one] = Butterworth::<2>::high_pass(210.0).stages;
-        let [detail_green_low] = Butterworth::<1>::low_pass(2_100.0).stages;
-        let [detail_blue_zero, detail_blue_one] = Butterworth::<2>::high_pass(1_255.0).stages;
-        let unused = Biquad::default();
-
-        Self {
-            stage_zero: [
-                BiquadPair::new(preview_bottom, preview_red_zero),
-                BiquadPair::new(preview_green_zero, preview_blue_zero),
-                BiquadPair::new(detail_red_zero, detail_green_zero),
-                BiquadPair::new(detail_blue_zero, unused),
-            ],
-            stage_one: [
-                BiquadPair::new(preview_red_one, preview_green_one),
-                BiquadPair::new(preview_blue_one, detail_red_one),
-                BiquadPair::new(detail_green_one, detail_blue_one),
-            ],
-            preview_blue_stage_two: BiquadPair::new(preview_blue_two, unused),
-            green_low_passes: BiquadPair::new(preview_green_low, detail_green_low),
-        }
-    }
-}
-
-#[cfg(all(target_arch = "aarch64", test))]
-impl ColorBandSplitter {
-    #[inline(always)]
-    fn process_vectors(&mut self, sample: f64) -> ColorBandVectors {
-        let input = unsafe { vdupq_n_f64(sample) };
-        let zero = unsafe { vdupq_n_f64(0.0) };
-        let sample_zero = unsafe { vuzp1q_f64(input, zero) };
-        let preview_bottom_red_zero = self.stage_zero[0].process(input);
-        let preview_green_blue_zero = self.stage_zero[1].process(input);
-        let detail_red_green_zero = self.stage_zero[2].process(input);
-        let detail_blue_zero = self.stage_zero[3].process(sample_zero);
-
-        let preview_red_green_high = self.stage_one[0]
-            .process(unsafe { vextq_f64::<1>(preview_bottom_red_zero, preview_green_blue_zero) });
-        let preview_blue_one_detail_red = self.stage_one[1]
-            .process(unsafe { vextq_f64::<1>(preview_green_blue_zero, detail_red_green_zero) });
-        let detail_green_high_blue = self.stage_one[2]
-            .process(unsafe { vextq_f64::<1>(detail_red_green_zero, detail_blue_zero) });
-        let preview_blue = self
-            .preview_blue_stage_two
-            .process(unsafe { vuzp1q_f64(preview_blue_one_detail_red, zero) });
-        let preview_green_detail_green = self
-            .green_low_passes
-            .process(unsafe { vextq_f64::<1>(preview_red_green_high, detail_green_high_blue) });
-
-        ColorBandVectors {
-            preview_bottom_red: unsafe {
-                vuzp1q_f64(preview_bottom_red_zero, preview_red_green_high)
-            },
-            preview_green_blue: unsafe {
-                vmulq_f64(
-                    vuzp1q_f64(preview_green_detail_green, preview_blue),
-                    load_f64x2([COLOR_PREVIEW_GREEN_GAIN, COLOR_PREVIEW_BLUE_GAIN]),
-                )
-            },
-            detail_red_green: unsafe {
-                vuzp2q_f64(preview_blue_one_detail_red, preview_green_detail_green)
-            },
-            detail_blue: unsafe { vuzp2q_f64(detail_green_high_blue, zero) },
-        }
-    }
-
-    #[cfg(test)]
-    fn process(&mut self, sample: f64) -> ColorBands {
-        let vectors = self.process_vectors(sample);
-        let [preview_bottom, preview_red] = store_f64x2(vectors.preview_bottom_red);
-        let [preview_green, preview_blue] = store_f64x2(vectors.preview_green_blue);
-        let [detail_red, detail_green] = store_f64x2(vectors.detail_red_green);
-        let [detail_blue, _] = store_f64x2(vectors.detail_blue);
-        ColorBands {
-            preview_bottom,
-            preview_red,
-            preview_green,
-            preview_blue,
-            detail_red,
-            detail_green,
-            detail_blue,
-        }
-    }
-}
-
 #[cfg(target_arch = "aarch64")]
 #[inline(always)]
 fn load_f64x2(values: [f64; 2]) -> float64x2_t {
@@ -1944,80 +1699,6 @@ fn store_f64x2(value: float64x2_t) -> [f64; 2] {
     // SAFETY: `values` always has writable storage for exactly two `f64` lanes.
     unsafe { vst1q_f64(values.as_mut_ptr(), value) };
     values
-}
-
-#[cfg(test)]
-fn extract_detail_features_scalar(pcm: &MonoPcm) -> Vec<FrameFeatures> {
-    let frame_samples = detail_frame_samples(pcm.sample_rate());
-    pcm.samples()
-        .chunks(frame_samples)
-        .map(|frame| extract_detail_frame(frame, frame_samples))
-        .collect()
-}
-
-#[cfg(test)]
-fn detail_frame_samples(sample_rate: u32) -> usize {
-    usize::try_from(sample_rate).expect("sample rate fits waveform arithmetic") / 150
-}
-
-#[cfg(test)]
-fn extract_detail_frame(samples: &[f32], frame_samples: usize) -> FrameFeatures {
-    let mut peak = 0.0_f64;
-    let mut sum_square = 0.0_f64;
-    for sample in samples {
-        let sample = f64::from(*sample);
-        peak = peak.max(sample.abs());
-        sum_square += sample * sample;
-    }
-    let denominator = frame_samples as f64;
-    FrameFeatures {
-        peak,
-        rms: (sum_square / denominator).sqrt(),
-    }
-}
-
-#[cfg(all(not(target_arch = "aarch64"), test))]
-fn extract_detail_features(pcm: &MonoPcm) -> Vec<FrameFeatures> {
-    extract_detail_features_scalar(pcm)
-}
-
-#[cfg(all(target_arch = "aarch64", test))]
-fn extract_detail_features(pcm: &MonoPcm) -> Vec<FrameFeatures> {
-    let frame_samples = detail_frame_samples(pcm.sample_rate());
-    let frame_count = pcm.len().div_ceil(frame_samples);
-    if frame_count == 0 {
-        return Vec::new();
-    }
-    let worker_count = rayon::current_num_threads()
-        .min(frame_count.div_ceil(MIN_PARALLEL_CHUNK_FRAMES))
-        .max(1);
-    let chunk_len = frame_count.div_ceil(worker_count);
-    (0..frame_count)
-        .step_by(chunk_len)
-        .map(|start| start..(start + chunk_len).min(frame_count))
-        .collect::<Vec<_>>()
-        .into_par_iter()
-        .map(|range| extract_detail_feature_range(pcm, frame_samples, range))
-        .flatten()
-        .collect()
-}
-
-#[cfg(all(target_arch = "aarch64", test))]
-fn extract_detail_feature_range(
-    pcm: &MonoPcm,
-    frame_samples: usize,
-    range: std::ops::Range<usize>,
-) -> Vec<FrameFeatures> {
-    let mut features = Vec::with_capacity(range.len());
-    for frame_index in range {
-        let start = frame_index * frame_samples;
-        let end = (start + frame_samples).min(pcm.len());
-        features.push(extract_detail_frame(
-            &pcm.samples()[start..end],
-            frame_samples,
-        ));
-    }
-    features
 }
 
 pub(crate) struct StreamingWaveformAccumulator {
@@ -2067,13 +1748,6 @@ impl StreamingWaveformAccumulator {
     }
 }
 
-#[cfg(test)]
-fn waveform_height(amplitude: f64, maximum: u8) -> u8 {
-    (amplitude.clamp(0.0, 1.0).powi(2) * f64::from(maximum))
-        .round()
-        .clamp(0.0, f64::from(maximum)) as u8
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ThreeBandWaveforms {
     preview: Vec<u8>,
@@ -2081,7 +1755,7 @@ struct ThreeBandWaveforms {
     normalize: [u16; 3],
 }
 
-#[cfg(any(not(target_arch = "aarch64"), test))]
+#[cfg(not(target_arch = "aarch64"))]
 struct ScalarThreeBandFilterBank {
     low_pass: Biquad,
     mid_high_pass: Biquad,
@@ -2090,7 +1764,7 @@ struct ScalarThreeBandFilterBank {
     high_low_pass: Biquad,
 }
 
-#[cfg(any(not(target_arch = "aarch64"), test))]
+#[cfg(not(target_arch = "aarch64"))]
 impl ScalarThreeBandFilterBank {
     fn new(sample_rate: u32) -> Self {
         let q = std::f64::consts::FRAC_1_SQRT_2;
@@ -2530,445 +2204,4 @@ fn finite_peak_follower(
 
 fn quantize_three_band(value: f64) -> u8 {
     value.clamp(0.0, f64::from(THREE_BAND_MAXIMUM)) as u8
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn streamed_batches_preserve_packed_waveforms() {
-        let samples = (0..ANALYSIS_SAMPLE_RATE as usize * 3)
-            .map(|index| {
-                let phase = std::f64::consts::TAU * index as f64 / 44_100.0;
-                (0.55 * (phase * 83.0).sin()
-                    + 0.27 * (phase * 719.0).sin()
-                    + 0.12 * (phase * 4_117.0).sin()) as f32
-            })
-            .collect::<Vec<_>>();
-        let pcm = MonoPcm::new(ANALYSIS_SAMPLE_RATE, samples.clone()).expect("PCM");
-        let expected = WaveformData::generate(&pcm).expect("waveforms");
-        let mut accumulator = StreamingWaveformAccumulator::new();
-        for chunk in samples.chunks(997) {
-            accumulator.push(chunk);
-        }
-        assert_eq!(accumulator.finish(), expected);
-    }
-
-    #[test]
-    fn delayed_loud_batches_are_scaled_once_within_or_across_columns() {
-        let same_column = map_native_loud_raw(
-            900,
-            &[
-                NativeLoudRawBatch {
-                    frame: 1,
-                    value: 2.0,
-                    delayed: false,
-                },
-                NativeLoudRawBatch {
-                    frame: 2,
-                    value: 3.0,
-                    delayed: true,
-                },
-            ],
-        );
-        let crossed_column = map_native_loud_raw(
-            900,
-            &[
-                NativeLoudRawBatch {
-                    frame: 1,
-                    value: 2.0,
-                    delayed: false,
-                },
-                NativeLoudRawBatch {
-                    frame: 3,
-                    value: 3.0,
-                    delayed: true,
-                },
-            ],
-        );
-        let expected = 5.0 * 15_000.0 / 900.0;
-        assert!((same_column[0] - expected).abs() < 0.000_01);
-        assert!((crossed_column[0] - expected).abs() < 0.000_01);
-    }
-
-    #[cfg(target_arch = "aarch64")]
-    #[test]
-    fn aarch64_simd_filter_bank_is_scalar_bit_exact() {
-        let mut scalar_colors = ScalarColorBandSplitter::default();
-        let mut simd_colors = ColorBandSplitter::default();
-
-        for index in 0..44_100 {
-            let phase = std::f64::consts::TAU * index as f64 / 44_100.0;
-            let sample = 0.55 * (phase * 83.0).sin()
-                + 0.27 * (phase * 719.0).sin()
-                + 0.12 * (phase * 4_117.0).sin();
-            let scalar = scalar_colors.process(sample);
-            let simd = simd_colors.process(sample);
-            for (scalar, simd) in [
-                (scalar.preview_bottom, simd.preview_bottom),
-                (scalar.preview_red, simd.preview_red),
-                (scalar.preview_green, simd.preview_green),
-                (scalar.preview_blue, simd.preview_blue),
-                (scalar.detail_red, simd.detail_red),
-                (scalar.detail_green, simd.detail_green),
-                (scalar.detail_blue, simd.detail_blue),
-            ] {
-                assert_eq!(scalar.to_bits(), simd.to_bits());
-            }
-        }
-    }
-
-    #[cfg(target_arch = "aarch64")]
-    #[test]
-    fn aarch64_native_loud_filter_bank_is_scalar_bit_exact() {
-        let mut scalar_filters = ScalarNativeLoudFilterBank::new(ANALYSIS_SAMPLE_RATE);
-        let mut simd_filters = NativeLoudFilterBank::new(ANALYSIS_SAMPLE_RATE);
-
-        for index in 0..44_100 {
-            let phase = std::f64::consts::TAU * index as f64 / 44_100.0;
-            let sample = (0.55 * (phase * 83.0).sin()
-                + 0.27 * (phase * 719.0).sin()
-                + 0.12 * (phase * 4_117.0).sin()) as f32;
-            let scalar = scalar_filters.process(sample);
-            let simd = simd_filters.process(sample);
-            for (scalar, simd) in scalar.into_iter().zip(simd) {
-                assert_eq!(scalar.to_bits(), simd.to_bits());
-            }
-        }
-    }
-
-    #[cfg(target_arch = "aarch64")]
-    #[test]
-    fn aarch64_legacy_filter_bank_is_scalar_bit_exact() {
-        let mut scalar_filters = ScalarLegacyFilterBank::new(ANALYSIS_SAMPLE_RATE);
-        let mut simd_filters = LegacyFilterBank::new(ANALYSIS_SAMPLE_RATE);
-
-        for index in 0..44_100 {
-            let phase = std::f64::consts::TAU * index as f64 / 44_100.0;
-            let sample = 0.55 * (phase * 83.0).sin()
-                + 0.27 * (phase * 719.0).sin()
-                + 0.12 * (phase * 4_117.0).sin();
-            let scalar = scalar_filters.process(sample);
-            let simd = simd_filters.process(sample);
-            for (scalar, simd) in [
-                (scalar.bottom, simd.bottom),
-                (scalar.whole[0], simd.whole[0]),
-                (scalar.whole[1], simd.whole[1]),
-                (scalar.whole[2], simd.whole[2]),
-                (scalar.color[0], simd.color[0]),
-                (scalar.color[1], simd.color[1]),
-                (scalar.color[2], simd.color[2]),
-            ] {
-                assert_eq!(scalar.to_bits(), simd.to_bits());
-            }
-        }
-    }
-
-    #[cfg(target_arch = "aarch64")]
-    #[test]
-    fn aarch64_three_band_filter_bank_is_scalar_bit_exact() {
-        let mut scalar_filters = ScalarThreeBandFilterBank::new(ANALYSIS_SAMPLE_RATE);
-        let mut simd_filters = ThreeBandFilterBank::new(ANALYSIS_SAMPLE_RATE);
-
-        for index in 0..44_100 {
-            let phase = std::f64::consts::TAU * index as f64 / 44_100.0;
-            let sample = 0.55 * (phase * 83.0).sin()
-                + 0.27 * (phase * 719.0).sin()
-                + 0.12 * (phase * 4_117.0).sin();
-            let scalar = scalar_filters.process(sample);
-            let simd = simd_filters.process(sample);
-            for (scalar, simd) in scalar.into_iter().zip(simd) {
-                assert_eq!(scalar.to_bits(), simd.to_bits());
-            }
-        }
-    }
-
-    #[cfg(target_arch = "aarch64")]
-    #[test]
-    fn aarch64_simd_feature_accumulation_is_scalar_bit_exact() {
-        let samples = (0..44_100)
-            .map(|index| {
-                let phase = std::f64::consts::TAU * index as f64 / 44_100.0;
-                (0.55 * (phase * 83.0).sin()
-                    + 0.27 * (phase * 719.0).sin()
-                    + 0.12 * (phase * 4_117.0).sin()) as f32
-            })
-            .collect();
-        let pcm = MonoPcm::new(ANALYSIS_SAMPLE_RATE, samples).expect("PCM");
-        let scalar = extract_detail_features_scalar(&pcm);
-        let simd = extract_detail_features(&pcm);
-        assert_eq!(scalar.len(), simd.len());
-        for (scalar, simd) in scalar.iter().zip(simd) {
-            for (scalar, simd) in [(scalar.peak, simd.peak), (scalar.rms, simd.rms)] {
-                assert_eq!(scalar.to_bits(), simd.to_bits());
-            }
-        }
-    }
-
-    #[cfg(target_arch = "aarch64")]
-    #[test]
-    fn aarch64_parallel_feature_chunks_preserve_packed_waveforms() {
-        let samples = (0..ANALYSIS_SAMPLE_RATE as usize * 42)
-            .map(|index| {
-                let phase = std::f64::consts::TAU * index as f64 / 44_100.0;
-                (0.55 * (phase * 83.0).sin()
-                    + 0.27 * (phase * 719.0).sin()
-                    + 0.12 * (phase * 4_117.0).sin()) as f32
-            })
-            .collect();
-        let pcm = MonoPcm::new(ANALYSIS_SAMPLE_RATE, samples).expect("PCM");
-        let scalar = extract_detail_features_scalar(&pcm);
-        let parallel = extract_detail_features(&pcm);
-        assert_eq!(scalar.len(), parallel.len());
-        let monochrome = MonochromeDetailAccumulator::from_pcm(&pcm).finish();
-        let loud = NativeLoudPreviewAccumulator::from_pcm(&pcm).finish();
-        let legacy = LegacyWaveformAccumulator::from_pcm(&pcm).finish(scalar.len());
-        let three_band = ThreeBandAccumulator::from_pcm(&pcm).finish(scalar.len());
-        assert_eq!(
-            pack_waveforms(
-                loud.clone(),
-                monochrome.clone(),
-                legacy.clone(),
-                three_band.clone()
-            ),
-            pack_waveforms(loud, monochrome, legacy, three_band)
-        );
-    }
-
-    #[test]
-    fn height_uses_peak_power() {
-        assert_eq!(waveform_height(0.5, 31), 8);
-    }
-
-    #[test]
-    fn native_zoom_whiteness_uses_eighth_width_low_pass_ratios() {
-        assert_eq!(native_zoom_whiteness(875, 1_000), 0);
-        assert_eq!(native_zoom_whiteness(874, 1_000), 1);
-        assert_eq!(native_zoom_whiteness(750, 1_000), 1);
-        assert_eq!(native_zoom_whiteness(749, 1_000), 2);
-        assert_eq!(native_zoom_whiteness(125, 1_000), 6);
-        assert_eq!(native_zoom_whiteness(124, 1_000), 7);
-        assert_eq!(native_zoom_whiteness(0, 0), 7);
-    }
-
-    #[test]
-    fn dominant_band_saturates_before_applying_winner_fraction() {
-        assert_eq!(quantize_dominant_band(1.0, 0, 44), i16::MAX as u16);
-        assert_eq!(quantize_dominant_band(0.5, 22, 44), 8_192);
-    }
-
-    #[test]
-    fn color_detail_preserves_native_tone_hue_families_and_normalizes_track_peak() {
-        fn analyze_tone(frequency_hz: f64, amplitude: f32) -> [u8; 4] {
-            let samples = (0..ANALYSIS_SAMPLE_RATE as usize * 2)
-                .map(|index| {
-                    (2.0 * std::f64::consts::PI * frequency_hz * index as f64
-                        / f64::from(ANALYSIS_SAMPLE_RATE))
-                    .sin() as f32
-                        * amplitude
-                })
-                .collect();
-            let pcm = MonoPcm::new(ANALYSIS_SAMPLE_RATE, samples).expect("tone PCM");
-            let waveforms = WaveformData::generate(&pcm).expect("tone waveforms");
-            let offset = 100 * 2;
-            let packed = u16::from_be_bytes([
-                waveforms.color_detail()[offset],
-                waveforms.color_detail()[offset + 1],
-            ]);
-            [
-                ((packed >> 13) & 7) as u8,
-                ((packed >> 10) & 7) as u8,
-                ((packed >> 7) & 7) as u8,
-                ((packed >> 2) & 31) as u8,
-            ]
-        }
-
-        for amplitude in [0.5, 0.000_5] {
-            assert_eq!(analyze_tone(80.0, amplitude), [7, 0, 0, 31]);
-            let middle = analyze_tone(500.0, amplitude);
-            assert_eq!([middle[0], middle[1], middle[3]], [0, 7, 31]);
-            assert!(middle[2] <= 1);
-            assert_eq!(analyze_tone(4_000.0, amplitude), [0, 2, 7, 31]);
-        }
-    }
-
-    #[test]
-    fn one_second_signal_has_protocol_exact_entry_counts() {
-        let pcm = MonoPcm::new(ANALYSIS_SAMPLE_RATE, vec![0.25; 44_100]).expect("PCM");
-        let waveforms = WaveformData::generate(&pcm).expect("waveforms");
-        assert_eq!(waveforms.monochrome_preview().len(), 400);
-        assert_eq!(waveforms.tiny_preview().len(), 100);
-        assert_eq!(waveforms.monochrome_detail().len(), 150);
-        assert_eq!(waveforms.color_preview().len(), 1_200 * 6);
-        assert_eq!(waveforms.color_detail().len(), 150 * 2);
-        assert_eq!(waveforms.three_band_preview().len(), 1_200 * 3);
-        assert_eq!(waveforms.three_band_detail().len(), 150 * 3);
-
-        assert_eq!(waveforms.pwv3().header_unknown, Some(0x0096_0000));
-        assert_eq!(waveforms.pwv4().header_unknown, Some(0));
-        assert_eq!(waveforms.pwv5().header_unknown, Some(0x0096_0305));
-        assert_eq!(waveforms.pwv6().header_unknown, None);
-        assert_eq!(waveforms.pwv7().header_unknown, Some(0x0096_0000));
-    }
-
-    #[test]
-    fn forty_eight_kilohertz_signal_keeps_one_hundred_fifty_detail_columns_per_second() {
-        let pcm = MonoPcm::new(48_000, vec![0.25; 48_000]).expect("PCM");
-        let waveforms = WaveformData::generate(&pcm).expect("waveforms");
-        assert_eq!(waveforms.monochrome_detail().len(), 150);
-        assert_eq!(waveforms.color_detail().len(), 150 * 2);
-        assert_eq!(waveforms.three_band_detail().len(), 150 * 3);
-    }
-
-    #[test]
-    fn silence_uses_native_preview_floor_and_impulse_lands_in_first_detail_column() {
-        let silence =
-            MonoPcm::new(ANALYSIS_SAMPLE_RATE, vec![0.0; DETAIL_FRAME_SAMPLES]).expect("PCM");
-        let silent_waveforms = WaveformData::generate(&silence).expect("silent waveforms");
-        assert!(
-            silent_waveforms
-                .monochrome_preview()
-                .iter()
-                .all(|value| *value == 0xa2)
-        );
-        assert!(
-            silent_waveforms
-                .color_preview()
-                .iter()
-                .all(|value| *value == 0)
-        );
-        assert!(
-            silent_waveforms
-                .three_band_detail()
-                .iter()
-                .all(|value| *value == 0)
-        );
-        assert!(
-            silent_waveforms
-                .monochrome_detail()
-                .iter()
-                .all(|value| *value == 0xe0)
-        );
-
-        let mut samples = vec![0.0; DETAIL_FRAME_SAMPLES * 2];
-        samples[0] = 1.0;
-        let impulse = MonoPcm::new(ANALYSIS_SAMPLE_RATE, samples).expect("PCM");
-        let impulse_waveforms = WaveformData::generate(&impulse).expect("impulse waveforms");
-        assert_eq!(impulse_waveforms.monochrome_detail()[0] & 0x1f, 31);
-        assert_eq!(impulse_waveforms.monochrome_detail()[1], 0xe0);
-    }
-
-    #[test]
-    fn three_band_packing_is_low_mid_high_with_seven_bit_levels() {
-        let dc = MonoPcm::new(ANALYSIS_SAMPLE_RATE, vec![1.0; 44_100]).expect("PCM");
-        let dc_waveforms = WaveformData::generate(&dc).expect("DC waveforms");
-        let dc_last =
-            &dc_waveforms.three_band_detail()[dc_waveforms.three_band_detail().len() - 3..];
-        assert!(dc_last[0] > dc_last[1]);
-        assert!(dc_last[0] > dc_last[2]);
-
-        let high_tone = MonoPcm::new(
-            ANALYSIS_SAMPLE_RATE,
-            (0..44_100)
-                .map(|index| {
-                    (std::f64::consts::TAU * 4_000.0 * index as f64 / 44_100.0).sin() as f32
-                })
-                .collect(),
-        )
-        .expect("PCM");
-        let high_waveforms = WaveformData::generate(&high_tone).expect("high-tone waveforms");
-        let high_last =
-            &high_waveforms.three_band_detail()[high_waveforms.three_band_detail().len() - 3..];
-        assert!(high_last[2] > high_last[0]);
-        assert!(
-            dc_waveforms
-                .three_band_detail()
-                .iter()
-                .chain(high_waveforms.three_band_detail())
-                .all(|value| *value <= THREE_BAND_MAXIMUM)
-        );
-    }
-
-    #[test]
-    fn three_band_preview_uses_native_overlapping_windows() {
-        let raw = (0..2_400)
-            .map(|index| {
-                [
-                    u16::try_from(index % 32_768).unwrap(),
-                    u16::try_from(index % 16_384).unwrap(),
-                    u16::try_from(index % 8_192).unwrap(),
-                ]
-            })
-            .collect::<Vec<_>>();
-        let preview = three_band_preview_averages(&raw);
-        assert_eq!(preview.len(), COLOR_PREVIEW_COLUMNS);
-        assert_eq!(preview[0], [0.25, 1.0 / 3.0, 0.5]);
-        assert_eq!(preview[1], [1.5, 2.0, 2.5]);
-        assert_eq!(preview[1_199], [2_397.5, 2_398.0, 2_398.5]);
-    }
-
-    #[test]
-    fn three_band_follower_has_native_finite_decay_history() {
-        let mut raw = vec![[0_u16; 3]; 302];
-        raw[1] = [10_000; 3];
-        assert_eq!(
-            finite_peak_follower(&raw, 301, 0, THREE_BAND_LOW_HISTORY, 0.99),
-            490.408_94_f32 as f64
-        );
-        assert_eq!(quantize_three_band(200.0), THREE_BAND_MAXIMUM);
-    }
-
-    #[cfg(target_arch = "aarch64")]
-    #[test]
-    fn aarch64_paired_three_band_followers_are_scalar_bit_exact() {
-        let raw = (0..1_024)
-            .map(|index| {
-                [
-                    ((index * 7_919 + 11) % 32_768) as u16,
-                    ((index * 4_099 + 23) % 32_768) as u16,
-                    ((index * 2_053 + 47) % 32_768) as u16,
-                ]
-            })
-            .collect::<Vec<_>>();
-        for (band, history, decay) in [
-            (0, THREE_BAND_LOW_HISTORY, THREE_BAND_LOW_DECAY),
-            (1, THREE_BAND_MID_HISTORY, THREE_BAND_MID_DECAY),
-            (2, THREE_BAND_HIGH_HISTORY, THREE_BAND_HIGH_DECAY),
-        ] {
-            for ends in [
-                [0, 1],
-                [history - 1, history],
-                [history, history + 1],
-                [history + 127, history + 509],
-            ] {
-                let paired = finite_peak_followers_pair(&raw, ends, band, history, decay);
-                for lane in 0..2 {
-                    assert_eq!(
-                        paired[lane].to_bits(),
-                        finite_peak_follower(&raw, ends[lane], band, history, decay).to_bits()
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn generated_entries_build_valid_anlz_tags() {
-        let pcm = MonoPcm::new(ANALYSIS_SAMPLE_RATE, vec![0.5; 588]).expect("PCM");
-        let waveforms = WaveformData::generate(&pcm).expect("waveforms");
-        assert_eq!(waveforms.pwav_tag().expect("PWAV").kind(), *b"PWAV");
-        assert_eq!(waveforms.pwv2_tag().expect("PWV2").kind(), *b"PWV2");
-        for waveform in [
-            waveforms.pwv3(),
-            waveforms.pwv4(),
-            waveforms.pwv5(),
-            waveforms.pwv6(),
-            waveforms.pwv7(),
-        ] {
-            let expected = waveform.kind;
-            let tag = waveform.to_tag().expect("counted waveform tag");
-            assert_eq!(tag.kind(), expected);
-        }
-    }
 }

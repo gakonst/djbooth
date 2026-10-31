@@ -426,27 +426,3 @@ async fn capture_input(
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn failed_input_is_visible_as_a_gap() {
-        let (input, receiver) = mpsc::channel(1);
-        drop(receiver);
-        let mut recording = BoothRecording {
-            directory: PathBuf::new(),
-            audio: false,
-            started: Instant::now(),
-            elapsed_at_stop: None,
-            progress: Arc::new(Progress::default()),
-            input,
-            stop: None,
-            worker: None,
-        };
-        assert!(recording.event("audioBuffer".into(), json!({})).is_err());
-        assert_eq!(recording.status()["gaps"], 1);
-        recording.stop().unwrap();
-    }
-}

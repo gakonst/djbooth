@@ -33,7 +33,7 @@ export class ClickTrack {
         this.scheduled.delete(deck);
         continue;
       }
-      const chart = chartFor(track, deck.waveform, deck.bpm, deck.rhythm);
+      const chart = chartFor(track, deck.waveform, deck.sourceBpm, deck.rhythm);
       const now = deck.audio.currentTime;
       const rate = deck.audio.playbackRate || 1;
       let from = this.scheduled.get(deck);

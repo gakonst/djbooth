@@ -49,9 +49,7 @@ into higher track counts explicitly.
 
 ## Adding native behavior
 
-1. Add an isolated fixture for the native behavior.
-2. Add differential coverage against the pinned reference revision where observable yt-dlp
-   behavior changes.
-3. Return a typed capability error only when reference delegation is safe before durable transfer.
-4. Do not add abort, network, filesystem, or validation errors to the fallback allowlist.
-5. Record the milestone and any new upstream revision in `docs/PROGRESS.md`.
+1. Compare observable behavior against the pinned reference revision.
+2. Return a typed capability error only when reference delegation is safe before durable transfer.
+3. Do not add abort, network, filesystem, or validation errors to the fallback allowlist.
+4. Record the milestone and any new upstream revision in `docs/PROGRESS.md`.

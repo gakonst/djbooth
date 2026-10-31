@@ -11,6 +11,7 @@ struct Scene {
   motion2: vec4f,
   booth: vec4f,
   drive: vec4f,
+  groove: vec4f,
 }
 @group(0) @binding(0) var<uniform> scene: Scene;
 @group(0) @binding(1) var waveforms: texture_2d<f32>;
@@ -55,6 +56,10 @@ fn distance_field(p: vec3f) -> f32 {
   q.x += sin(q.y * 0.6 + scene.time * 0.24) * (0.42 + warp);
   q.y += sin(q.x * 0.7 - scene.time * 0.19) * 0.32;
   q.z += sin(q.x * 1.2 + q.y * 0.6 + scene.time * 0.11) * mids * 0.16;
+  // Small local bends articulate the lattice; camera and passage scale remain stable.
+  q.x += scene.groove.x * sin(q.z * 1.4) * 0.07;
+  q.y += scene.groove.y * cos(q.x * 1.3) * 0.07;
+  q.z += scene.groove.z * sin(q.y * 1.2) * 0.06;
   let frequency = 1.38;
   let v = q * frequency;
   let gyroid = sin(v.x)*cos(v.y) + sin(v.y)*cos(v.z)
@@ -74,7 +79,8 @@ fn surface_normal(p: vec3f) -> vec3f {
 }
 fn source_color(row: f32, u: f32) -> vec3f {
   let rgb = textureSampleLevel(waveforms,linear_sampler,vec2f(clamp(u,0.0,1.0),(row+0.5)/3.0),0.0).rgb;
-  return rgb / max(0.02,max(rgb.r,max(rgb.g,rgb.b)));
+  let spectral = array<vec3f,3>(vec3f(1.0,0.34,0.07),vec3f(0.52,0.22,0.88),vec3f(0.50,0.85,0.45));
+  return mix(spectral[u32(clamp(row,0.0,2.0))],rgb / max(0.02,max(rgb.r,max(rgb.g,rgb.b))),0.38);
 }
 fn lighting(ray: vec3f, point: vec3f) -> vec3f {
   let level = levels();
@@ -92,7 +98,7 @@ fn lighting(ray: vec3f, point: vec3f) -> vec3f {
   // Long white softboxes supply readable black/chrome structure between colored highlights.
   let strip = pow(max(0.0,1.0-abs(ray.y * 0.82 + ray.x * 0.42 - 0.28)),48.0);
   let edge = pow(max(0.0,1.0-abs(ray.x * 0.38 - ray.z * 0.75 + 0.34)),80.0);
-  color += vec3f(1.0) * (strip * 3.4 + edge * 2.0) * (0.20 + dot(level,vec3f(0.32)));
+  color += vec3f(1.0,0.79,0.58) * (strip * 2.7 + edge * 1.6) * (0.20 + dot(level,vec3f(0.32)));
   return color;
 }
 
@@ -142,7 +148,7 @@ fn fs_main(@location(0) uv: vec2f) -> @location(0) vec4f {
       // Each beat launches a separate bright front through depth toward the viewer.
       let passing = pow(0.5+0.5*cos(motion.w*6.283185-gesture*1.7),10.0);
       let hue = signal.rgb / max(0.02,max(signal.r,max(signal.g,signal.b)));
-      color += hue * line * lane_level[i] * (0.025 + audio.w * 0.35 + passing * 2.4) * (0.35+fresnel);
+      color += hue * line * lane_level[i] * (0.025 + audio.w * 0.35 + passing * 1.2) * (0.35+fresnel);
       color += hue * passing * lane_level[i] * (0.12 + fresnel*0.6);
       color += hue * motion.y * lane_level[i] * pow(0.5+0.5*sin(phase*(3.0+motion.z*0.2)-scene.time),12.0) * 0.5;
     }

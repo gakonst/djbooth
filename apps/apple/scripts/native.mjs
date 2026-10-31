@@ -21,8 +21,6 @@ const help = `Native DJ Booth (requires macOS and Xcode 26+):
   pnpm native:diagnostics --device <id>                    Copy persistent phone diagnostics
   pnpm native:link --device <id> --operation <name> --arguments <json> Call Rust on the phone (hardware-test mode)
   pnpm --filter @gakonst/djbooth-apple check                  Compile macOS and iOS
-  pnpm --filter @gakonst/djbooth-apple test                   Test the local store and sync package
-  pnpm --filter @gakonst/djbooth-apple test:ui                Run native UI tests on the dedicated simulator
 
 Options:
   --arguments-file <file> Read hardware command JSON from a file instead of exposing it in process arguments
@@ -40,7 +38,6 @@ Options:
   --optimized             Optimize Swift (-O) while retaining Debug features
   --dj-link-hardware-test Keep the Debug app awake and enable paired-device Rust commands
   --demo                  Explicit DEBUG-only sample library
-  --only-testing <test>    Restrict native UI tests to one Xcode test identifier
 Environment:
   DJBOOTH_APPLE_TEAM       Override the Xcode signing team for Mac and device builds
   DJBOOTH_APPLE_BUNDLE_ID  Override the app identifier for personal signing and device commands
@@ -48,7 +45,7 @@ Environment:
 `;
 if (command === "help" || args.includes("--help")) { console.log(help); process.exit(0); }
 if (process.platform !== "darwin") {
-  if (["build", "check", "test-kit"].includes(command)) {
+  if (["build", "check"].includes(command)) {
     console.log("Native Apple checks require macOS with Xcode; skipped on this host."); process.exit(0);
   }
   throw new Error("The native app requires macOS and Xcode.");
@@ -168,9 +165,7 @@ async function hardwareRequest(device, operation, input = {}) {
   throw new Error("No response from phone. Check it is open in hardware-test mode. Command outcome is unknown; do not automatically retry mutations.");
 }
 
-if (command === "test-kit") {
-  run("swift", ["test", "--package-path", "DJBoothKit"]);
-} else {
+{
   await import("./project.mjs");
   switch (command) {
     case "link": {
@@ -245,18 +240,6 @@ if (command === "test-kit") {
         run("xcrun", ["devicectl", "device", "install", "app", "--device", device, app]);
       }
       run("xcrun", ["devicectl", "device", "process", "launch", "--device", device, "--terminate-existing", ...(args.includes("--console") ? ["--console"] : []), bundleID, ...appArguments], { env: { ...process.env, ...environment } });
-      break;
-    }
-    case "test-ui": {
-      const device = value("--device");
-      const id = device ?? simulator();
-      const results = resolve(root, ".build/ui-tests", `${Date.now()}.xcresult`);
-      mkdirSync(dirname(results), { recursive: true });
-      run("xcodebuild", ["-project", "DJBooth.xcodeproj", "-scheme", "DJBooth-iOS", "-configuration", configuration,
-        "-derivedDataPath", derived, "-destination", `platform=${device ? "iOS" : "iOS Simulator"},id=${id}`, "-resultBundlePath", results,
-        "-parallel-testing-enabled", "NO", "CODE_SIGNING_ALLOWED=YES", ...(device ? ["-allowProvisioningUpdates", "-allowProvisioningDeviceRegistration"] : ["CODE_SIGN_IDENTITY=-"]), ...optimizationSettings,
-        ...(value("--only-testing") ? [`-only-testing:${value("--only-testing")}`] : []), "test"]);
-      console.log(`UI test results: ${results}`);
       break;
     }
     default: throw new Error(`Unknown command: ${command}\n${help}`);

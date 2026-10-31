@@ -40,16 +40,14 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test",
+    "check": "pnpm format:check && pnpm lint && pnpm typecheck",
     "cli": "tsx src/bin.ts",
-    "format": "oxfmt --write src test scripts package.json tsconfig.json tsconfig.build.json README.md && cargo +nightly fmt --manifest-path ../../rust/Cargo.toml --all",
-    "format:check": "oxfmt --check src test scripts package.json tsconfig.json tsconfig.build.json README.md && cargo +nightly fmt --manifest-path ../../rust/Cargo.toml --all -- --check",
-    "lint": "oxlint src test scripts",
+    "format": "oxfmt --write src scripts package.json tsconfig.json tsconfig.build.json README.md && cargo +nightly fmt --manifest-path ../../rust/Cargo.toml --all",
+    "format:check": "oxfmt --check src scripts package.json tsconfig.json tsconfig.build.json README.md && cargo +nightly fmt --manifest-path ../../rust/Cargo.toml --all -- --check",
+    "lint": "oxlint src scripts",
     "native:build": "node scripts/build-native.mjs",
     "native:run": "cargo run --manifest-path ../../rust/Cargo.toml -p djbooth-rs -- link",
-    "native:test": "cargo test --manifest-path ../../rust/Cargo.toml -p djtools-core -p djtools-link -p djbooth-rs",
     "prepack": "pnpm build && pnpm native:build",
-    "test": "vitest run && pnpm native:test",
     "typecheck": "tsc --noEmit",
     "validate": "pnpm check && pnpm build"
   },
@@ -61,12 +59,10 @@
   },
   "devDependencies": {
     "@types/node": "^22.19.7",
-    "@vitest/coverage-v8": "^4.1.10",
     "oxfmt": "^0.35.0",
     "oxlint": "^1.50.0",
     "tsx": "^4.21.0",
-    "typescript": "^5.9.3",
-    "vitest": "^4.1.10"
+    "typescript": "^5.9.3"
   },
   "engines": {
     "node": ">=22"

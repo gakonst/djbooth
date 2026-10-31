@@ -36,33 +36,25 @@ enum LibraryBrowseMode: String, CaseIterable {
 
 private struct BoothLaunchConfiguration: Sendable {
     let demo: Bool
-    let uiTestID: UUID?
     let cloudURL: String
     let root: URL
     let scope: String
     let accountID: String?
-    var inMemory: Bool { demo && uiTestID == nil }
+    var inMemory: Bool { demo }
     var directory: URL? { inMemory ? nil : root.appendingPathComponent(scope) }
     var audioDirectory: URL { (scope == "local" ? root : root.appendingPathComponent(scope)).appendingPathComponent("Audio") }
     init() throws {
         #if DEBUG
         let arguments = ProcessInfo.processInfo.arguments
-        if let index = arguments.firstIndex(of: "--ui-test-library") {
-            guard arguments.indices.contains(index + 1), let id = UUID(uuidString: arguments[index + 1]) else {
-                throw ClientError.http(400, "UI test library requires a UUID")
-            }
-            uiTestID = id
-        } else { uiTestID = nil }
-        demo = arguments.contains("--demo") || uiTestID != nil
+        demo = arguments.contains("--demo")
         #else
-        uiTestID = nil; demo = false
+        demo = false
         #endif
         cloudURL = demo ? "" : (ProcessInfo.processInfo.environment["DJBOOTH_CLOUD_URL"]
             ?? UserDefaults.standard.string(forKey: "cloudURL") ?? "")
         let applicationRoot = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("DJBooth", isDirectory: true)
-        if let uiTestID { root = applicationRoot.appendingPathComponent("UITests").appendingPathComponent(uiTestID.uuidString) }
-        else if demo { root = FileManager.default.temporaryDirectory.appendingPathComponent("DJBoothPreview") }
+        if demo { root = FileManager.default.temporaryDirectory.appendingPathComponent("DJBoothPreview") }
         else { root = applicationRoot }
         let endpoint = try? Endpoint(cloudURL)
         let savedAccount = endpoint.flatMap { UserDefaults.standard.string(forKey: "cloudAccount:" + $0.scope) }
@@ -589,21 +581,11 @@ private struct BoothLaunchConfiguration: Sendable {
         await loadCrew(crewID)
     }
     func moveCrewItem(crewID: String, crateID: String, itemID: String, afterItemID: String?) async throws {
-        #if DEBUG
-        if demo, ProcessInfo.processInfo.arguments.contains("--ui-test-crews") {
-            persistCrewCache(); return
-        }
-        #endif
         guard let cloud else { throw ClientError.http(401, "Connect DJ Booth first") }
         crewCrates[crateID] = try await cloud.moveCrewTrack(crewID: crewID, crateID: crateID, itemID: itemID, afterItemID: afterItemID)
         persistCrewCache()
     }
     func inviteToCrew(_ crewID: String) async throws -> CrewInvite {
-        #if DEBUG
-        if ProcessInfo.processInfo.arguments.contains("--ui-test-library"), ProcessInfo.processInfo.arguments.contains("--ui-test-crews") {
-            return try JSONDecoder().decode(CrewInvite.self, from: Data("{\"token\":\"\(String(repeating: "a", count: 43))\",\"role\":\"dj\",\"expiresAt\":2000000000}".utf8))
-        }
-        #endif
         guard let cloud else { throw ClientError.http(401, "Connect DJ Booth first") }
         return try await cloud.createCrewInvite(crewID: crewID)
     }
@@ -878,7 +860,7 @@ private struct BoothLaunchConfiguration: Sendable {
     var workstation: WorkstationClient? {
         guard cloudAccountID == nil || UserDefaults.standard.string(forKey: "workstationAllowed:" + cloudStorageScope) == workstationURL else { return nil }
         guard let endpoint = try? Endpoint(workstationURL, loopbackOnly: true) else { return nil }
-        return WorkstationClient(endpoint: endpoint, session: PerformanceProbe.serverUnavailableSession)
+        return WorkstationClient(endpoint: endpoint)
     }
 
     /// Start disk work synchronously from App.init, before SwiftUI owns the main thread.
@@ -903,7 +885,7 @@ private struct BoothLaunchConfiguration: Sendable {
         PerformanceProbe.libraryBegan()
         demo = configuration.demo; root = configuration.root; cloudURL = configuration.cloudURL
         snapshotDecoder = decoder
-        let uiTestID = configuration.uiTestID, scope = configuration.scope
+        let scope = configuration.scope
         workstationURL = demo ? "http://127.0.0.1:4179" : (UserDefaults.standard.string(forKey: "workstationURL") ?? "http://127.0.0.1:4179")
         #if DEBUG
         let arguments = ProcessInfo.processInfo.arguments
@@ -928,12 +910,12 @@ private struct BoothLaunchConfiguration: Sendable {
         store = libraryStore
         crews = crewCache.crews; crewDetails = crewCache.details; crewCrates = crewCache.crates
         PerformanceProbe.event("library_store_ready")
-        audio = try AudioFiles(directory: configuration.audioDirectory, session: PerformanceProbe.serverUnavailableSession)
+        audio = try AudioFiles(directory: configuration.audioDirectory)
         do {
             try await pairedMac.open(directory: root.appendingPathComponent("PairedMac"), inMemory: demo)
             await pairedMac.refreshAvailability(in: audio)
         } catch { pairedMac.error = "Your Mac pairing could not open. Pair again in settings." }
-        playbackPreferences = PlaybackSessionPreferences(scope: demo ? "demo-\(uiTestID?.uuidString ?? UUID().uuidString)" : scope)
+        playbackPreferences = PlaybackSessionPreferences(scope: demo ? "demo-\(UUID().uuidString)" : scope)
         #if os(iOS)
         sonos.configure(playbackPreferences)
         #endif
@@ -958,7 +940,7 @@ private struct BoothLaunchConfiguration: Sendable {
         if !demo, !cloudURL.isEmpty, let endpoint = try? Endpoint(cloudURL) {
             do {
                 if configuration.accountID != nil, let token = try Keychain.read(scope) {
-                    cloud = CloudClient(endpoint: endpoint, token: token, session: PerformanceProbe.serverUnavailableSession)
+                    cloud = CloudClient(endpoint: endpoint, token: token)
                 }
             } catch {
                 syncStatus = "Cloud sync needs attention"
@@ -970,46 +952,7 @@ private struct BoothLaunchConfiguration: Sendable {
             try store.ingest(DemoLibrary.tracks)
             for collection in DemoLibrary.collections { try store.save(collection, kind: .collection, id: collection.id) }
             try store.toggleFavorite(DemoLibrary.tracks[0].id)
-            #if DEBUG
-            if uiTestID != nil, arguments.contains("--ui-test-long-playlist") {
-                try store.ingest(DemoLibrary.longPlaylistTracks)
-                let collection = DemoLibrary.longPlaylist
-                try store.save(collection, kind: .collection, id: collection.id)
-            }
-            #endif
         }
-        #if DEBUG
-        if uiTestID != nil, arguments.contains("--ui-test-crews") {
-            let role = arguments.contains("--ui-test-crew-viewer") ? "viewer" : "owner"
-            let contributors = arguments.contains("--ui-test-crew-contributors")
-            let items = contributors ? """
-            [{"id":"item-georgios","crateID":"crate-demo","recordingID":"demo-5","title":"A Walk","artist":"Tycho",
-              "sortKey":1024,"addedBy":"georgios","createdAt":"now","updatedAt":"now"},
-             {"id":"item-alex","crateID":"crate-demo","recordingID":"missing-edit","title":"Unreleased edit","artist":"Alex Rivera",
-              "sortKey":2048,"addedBy":"alex","createdAt":"now","updatedAt":"now"},
-             {"id":"item-unknown","crateID":"crate-demo","recordingID":"missing-recording","title":"Late night find",
-              "sortKey":3072,"addedBy":"unavailable-account","createdAt":"now","updatedAt":"now"}]
-            """ : "[]"
-            let itemCount = contributors ? 3 : 0
-            let fixture = """
-            {"crews":[{"id":"crew-demo","name":"No Static","role":"\(role)","memberCount":2,"crateCount":1}],
-             "details":{"crew-demo":{"crew":{"id":"crew-demo","name":"No Static","role":"\(role)"},
-               "members":[{"accountID":"georgios","displayName":"\(contributors ? "Georgios Konstantopoulos" : "Georgios")","role":"owner","joinedAt":"now"},
-                          {"accountID":"alex","displayName":"\(contributors ? "Alex Rivera" : "Alex")","role":"dj","joinedAt":"now"}],
-               "crates":[{"id":"crate-demo","crewID":"crew-demo","name":"Friday Warmup","itemCount":\(itemCount)}]}},
-             "crates":{"crate-demo":{"crate":{"id":"crate-demo","crewID":"crew-demo","name":"Friday Warmup","itemCount":\(itemCount)},"items":\(items)}}}
-            """
-            let cache = try JSONDecoder().decode(CrewCache.self, from: Data(fixture.utf8))
-            crews = cache.crews; crewDetails = cache.details; crewCrates = cache.crates
-            if contributors {
-                var shared = DemoLibrary.tracks[4]
-                shared.id = "someone-elses-track"; shared.mediaHash = String(repeating: "a", count: 64)
-                shared.mediaExtension = "mp3"; shared.analyzed = true
-                crewCrates["crate-demo"]?.items[1].track = shared
-            }
-            persistCrewCache()
-        }
-        #endif
         usbDevice = try store.usbDevice()
         if snapshot.revision == store.revision {
             try applyLibrarySnapshot(snapshot, metadataOnly: true)
@@ -1026,13 +969,6 @@ private struct BoothLaunchConfiguration: Sendable {
         }
         player.onResumeRequested = { [weak self] in Task { await self?.togglePlayback() } }
         player.onPauseRequested = { [weak self] in self?.playbackRequest = UUID() }
-        #if DEBUG
-        if demo, arguments.contains("--ui-test-session"), playbackPreferences?.load() == nil,
-           let collection = collections.first, collection.trackIDs.count > 1 {
-            playbackPreferences?.save(PlaybackSession(trackID: collection.trackIDs[1], queueIDs: collection.trackIDs, elapsed: 45,
-                                                      selectedCollection: collection.id, queueCollection: collection.id))
-        }
-        #endif
         restorePlaybackSession()
         restoreAgentConversation()
         #if DEBUG
@@ -1050,14 +986,6 @@ private struct BoothLaunchConfiguration: Sendable {
         }
         #endif
         PerformanceProbe.event("library_session_restored")
-        #if DEBUG
-        if demo, arguments.contains("--ui-test-player"), let track = tracks.first(where: { $0.id == "demo-5" }) {
-            player.prepare(track, url: nil, queue: tracks)
-        }
-        #endif
-        #if DEBUG && os(iOS) && targetEnvironment(simulator)
-        if demo, arguments.contains("--ui-test-decks") { try djLink.installPreviewDecks() }
-        #endif
         try await prepareInitialWaveforms()
         PerformanceProbe.libraryReady(trackCount: tracks.count)
     }
@@ -1122,13 +1050,7 @@ private struct BoothLaunchConfiguration: Sendable {
         if favorites != snapshot.favorites { favorites = snapshot.favorites }
         if annotations != snapshot.annotations { annotations = snapshot.annotations }
         let sharedOffline = offlineIDs.filter { $0.hasPrefix("crew:") && tracksByID[$0] != nil }
-        var availableOffline = snapshot.offlineIDs.filter { !$0.hasPrefix("usb:") }.union(sharedOffline).union(pairedMac.offlineIDs)
-        #if DEBUG && os(iOS) && targetEnvironment(simulator)
-        // UI-only availability fixture; demo loads never call the Rust server.
-        if demo, ProcessInfo.processInfo.arguments.contains("--ui-test-deck-downloads") {
-            availableOffline.formUnion(["demo-2", "demo-5"])
-        }
-        #endif
+        let availableOffline = snapshot.offlineIDs.filter { !$0.hasPrefix("usb:") }.union(sharedOffline).union(pairedMac.offlineIDs)
         if offlineIDs != availableOffline { offlineIDs = availableOffline }
         cacheSharedAudio()
         prunePlaylistRemovalHistory()
@@ -2155,7 +2077,7 @@ private struct BoothLaunchConfiguration: Sendable {
     func signOutCloud() async throws {
         guard !syncing, !refreshRunning, !exportingCollection else { throw ClientError.http(409, "Wait for the current sync or export to finish") }
         let localStore = try LibraryStore(directory: root.appendingPathComponent("local"))
-        let localAudio = try AudioFiles(directory: root.appendingPathComponent("Audio"), session: PerformanceProbe.serverUnavailableSession)
+        let localAudio = try AudioFiles(directory: root.appendingPathComponent("Audio"))
         if let endpoint = try? Endpoint(cloudURL), let cloudAccountID {
             try Keychain.remove(endpoint.accountScope(cloudAccountID))
             UserDefaults.standard.removeObject(forKey: "cloudAccount:" + endpoint.scope)
@@ -2206,12 +2128,12 @@ private struct BoothLaunchConfiguration: Sendable {
         let endpoint = try Endpoint(url)
         let token = token.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !token.isEmpty else { throw ClientError.http(401, "Sign in with Nanocodex") }
-        let client = CloudClient(endpoint: endpoint, token: token, session: PerformanceProbe.serverUnavailableSession)
+        let client = CloudClient(endpoint: endpoint, token: token)
         let account = try await client.account()
         guard !syncing, !refreshRunning, !exportingCollection else { throw ClientError.http(409, "Wait for the current sync or export to finish") }
         let scope = endpoint.accountScope(account.id)
         let newStore = try LibraryStore(directory: root.appendingPathComponent(scope))
-        let newAudio = try AudioFiles(directory: root.appendingPathComponent(scope).appendingPathComponent("Audio"), session: PerformanceProbe.serverUnavailableSession)
+        let newAudio = try AudioFiles(directory: root.appendingPathComponent(scope).appendingPathComponent("Audio"))
         try Keychain.save(token, key: scope)
         UserDefaults.standard.set(account.id, forKey: "cloudAccount:" + endpoint.scope)
         UserDefaults.standard.set(endpoint.url.absoluteString, forKey: "cloudURL")

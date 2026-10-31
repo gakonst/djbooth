@@ -26,8 +26,11 @@ import Observation
         defer { running = false }
         let root = ProcessInfo.processInfo.environment["DJBOOTH_REPOSITORY"]
             ?? Bundle.main.object(forInfoDictionaryKey: "DJBoothRepository") as? String
+        let reportProgress: @MainActor @Sendable (String) -> Void = { [weak self] update in
+            self?.progress = update
+        }
         do {
-            let completion = try await Task.detached(priority: .userInitiated) { [weak self] in
+            let completion = try await Task.detached(priority: .userInitiated) {
                 let process = Process()
                 var env = ProcessInfo.processInfo.environment
                 let pnpmDirectory = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/pnpm").path
@@ -56,8 +59,7 @@ import Observation
                     // OAuth URLs remain in the browser, not in retained app diagnostics.
                     let safe = text.split(separator: "\n").filter { !$0.contains("https://") && !$0.contains("http://") }.joined(separator: "\n")
                     last = String((last + safe).suffix(1600))
-                    let update = last
-                    await MainActor.run { self?.progress = update }
+                    await reportProgress(last)
                 }
                 process.waitUntilExit()
                 return (CommandResult(exitCode: process.terminationStatus, stdout: try await stdout.value), last)

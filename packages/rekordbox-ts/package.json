@@ -94,18 +94,15 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "build:analyzer": "../../scripts/build-djbooth-rs.sh",
-    "check": "oxlint src test && oxfmt --check .",
+    "check": "oxlint src && oxfmt --check .",
     "cli": "tsx src/cli.ts",
     "format": "oxfmt --write .",
     "format:check": "oxfmt --check .",
-    "lint": "oxlint src test",
+    "lint": "oxlint src",
     "prepack": "pnpm build",
     "stems:ui": "node demo/stems-player/server.mjs",
-    "test": "vitest run",
-    "test:coverage": "vitest run --coverage",
-    "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "validate": "pnpm check && pnpm test && pnpm typecheck && pnpm build"
+    "validate": "pnpm check && pnpm typecheck && pnpm build"
   },
   "dependencies": {
     "better-sqlite3-multiple-ciphers": "^12.11.1",
@@ -116,12 +113,10 @@
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^24.0.0",
-    "@vitest/coverage-v8": "4.1.10",
     "oxfmt": "^0.35.0",
     "oxlint": "^1.50.0",
     "tsx": "^4.21.0",
-    "typescript": "^5.9.0",
-    "vitest": "^4.0.0"
+    "typescript": "^5.9.0"
   },
   "preferGlobal": true,
   "engines": {

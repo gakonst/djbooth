@@ -20,13 +20,4 @@ enum DemoLibrary {
         Collection(id: "demo-c3", name: "The warm-up", trackIDs: ["demo-2", "demo-6", "demo-8"]),
         Collection(id: "demo-c4", name: "Left of center", trackIDs: ["demo-3", "demo-4", "demo-9"])
     ]
-    #if DEBUG
-    static let longPlaylistTracks: [Track] = (1...24).map { index in
-        var track = tracks[4]
-        track.id = "demo-scroll-\(index)"
-        track.title = "Preview track \(index)"
-        return track
-    }
-    static let longPlaylist = Collection(id: "demo-scroll", name: "Long preview playlist", trackIDs: longPlaylistTracks.map(\.id))
-    #endif
 }

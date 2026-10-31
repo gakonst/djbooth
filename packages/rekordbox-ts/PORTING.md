@@ -1,5 +1,7 @@
 # Porting log
 
+Historical test counts and coverage results below describe validation before the repository test suites were removed; they are not current development requirements.
+
 This file is the durable project journal: source pins, compatibility scope, decisions, milestones, and verification results.
 
 ## Source pins
@@ -13,22 +15,22 @@ This file is the durable project journal: source pins, compatibility scope, deci
 - `ssmall256/mlx-audio-separator`: PyPI 0.1.5, source commit `0ddc8cf5507906b52ac45a9cd9e6d26e881a93f8` (MLX-native separation and checkpoint conversion)
 - `SYH99999/MelBandRoformer4StemFTLarge`: `62371baf060e8205915b4e6e3f9459fc016b6dd1`, checkpoint SHA-256 `590358e6abe3255d87d7173ca2e4005de082f14cbb466ea4c5ffedbcc3964506` (Apache-2.0 four-source model)
 
-The Python source at the pinned revision is the behavioral specification. Tests are ported or replaced with equivalent fixtures as each area lands.
+The Python source at the pinned revision is the behavioral specification.
 
 ## Compatibility matrix
 
-| Area                         | TypeScript API | CLI             | Parity tests | Status                      |
-| ---------------------------- | -------------- | --------------- | ------------ | --------------------------- |
-| Configuration discovery      | implemented    | `config show`   | 4 tests      | complete                    |
-| Utility functions            | implemented    | n/a             | 6 tests      | complete                    |
-| Rekordbox XML                | implemented    | `xml ...`       | 6 tests      | complete                    |
-| ANLZ files                   | implemented    | `anlz ...`      | 5 tests      | complete                    |
-| My Settings files            | implemented    | `settings ...`  | 7 tests      | complete                    |
-| Smart playlists              | implemented    | `smartlist ...` | 7 tests      | complete                    |
-| Master database              | implemented    | `db ...`        | 5 tests      | complete                    |
-| Master DB registry/aux files | implemented    | via `db ...`    | 1 test       | complete                    |
-| OneLibrary / Device Lib Plus | implemented    | `device ...`    | 5 tests      | hardware validation pending |
-| Legacy Device Library PDB    | implemented    | `djbooth usb …` | 10 tests     | hardware validation pending |
+| Area                         | TypeScript API | CLI             | Status                      |
+| ---------------------------- | -------------- | --------------- | --------------------------- |
+| Configuration discovery      | implemented    | `config show`   | complete                    |
+| Utility functions            | implemented    | n/a             | complete                    |
+| Rekordbox XML                | implemented    | `xml ...`       | complete                    |
+| ANLZ files                   | implemented    | `anlz ...`      | complete                    |
+| My Settings files            | implemented    | `settings ...`  | complete                    |
+| Smart playlists              | implemented    | `smartlist ...` | complete                    |
+| Master database              | implemented    | `db ...`        | complete                    |
+| Master DB registry/aux files | implemented    | via `db ...`    | complete                    |
+| OneLibrary / Device Lib Plus | implemented    | `device ...`    | hardware validation pending |
+| Legacy Device Library PDB    | implemented    | `djbooth usb …` | hardware validation pending |
 
 ## Decisions
 

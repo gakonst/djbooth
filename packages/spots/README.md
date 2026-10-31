@@ -304,7 +304,7 @@ the CLI labels deprecated operations where Spotify's schema does.
 ## Development
 
 ```sh
-pnpm check       # formatting, lint, typecheck, and tests
+pnpm check       # formatting, lint, and typecheck
 pnpm build       # ESM library, declarations, and CLI
 pnpm cli -- --help
 ```

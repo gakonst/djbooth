@@ -1,6 +1,7 @@
 import { conversationAccess, FAST_AGENT_CONVERSATION_ID } from "../src/agent-permissions.js";
 import { Client, Dialog, Transport, type Connection } from "nanocodex/connect";
 import "./style.css";
+import { openWorkstation } from "./workstation";
 import { phoneTools } from "../src/phone-tools";
 
 const el = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id)! as T;
@@ -36,6 +37,10 @@ async function main() {
     "/v1/auth/config",
   );
   if (config.mode === "shared") {
+    if (new URLSearchParams(location.search).get("native") !== "1") {
+      await openWorkstation();
+      return;
+    }
     el("welcome-title").textContent = "Open DJ Booth";
     el("welcome-detail").textContent =
       "This shared library is available without signing in. Anyone with the URL can read it; changes require a private publishing token. Nanocodex agent and music connections are unavailable.";

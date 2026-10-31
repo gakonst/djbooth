@@ -6365,3 +6365,15 @@ select:focus-visible,
     display: none;
   }
 }
+
+/* Keep published-library transport usable beside the waveform on phones. */
+@media (max-width: 900px) {
+  .cloud-workstation .player-panel.is-minimal .player-identity {
+    position: relative;
+    z-index: 2;
+  }
+
+  .cloud-workstation .player-panel.is-minimal .player-waveform-wrap {
+    overflow: hidden;
+  }
+}

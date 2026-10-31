@@ -1,4 +1,6 @@
+import { createDanceMotion, type MusicDance } from "./music-dance.js";
 import * as THREE from "three";
+import { createArcadeRacer } from "./arcade-racer.js";
 import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
@@ -11,7 +13,7 @@ import "./race-booth.css";
 
 const THEMES: VisualTheme[] = ["halloween", "eighties", "y2k", "tech-house"];
 const PALETTES = [
-  [0xff862e, 0xb386ff, 0xe8ddbf],
+  [0xff923d, 0xa876e8, 0xbdebb3],
   [0xff298f, 0x29eaff, 0xa75aff],
   [0xff8bd7, 0x8deaff, 0xdfbaff],
   [0xbaff4e, 0xe4ffef, 0x38eab2],
@@ -21,6 +23,27 @@ const ROAD_Y = -3.8;
 
 /** One continuous course, with the existing looks as smoothly blended track environments. */
 export async function createRaceBooth(host: HTMLCanvasElement) {
+  const danceMotion = createDanceMotion();
+  let suppliedDance: MusicDance | undefined;
+  let dancePrevious: number | undefined;
+  let danceLeader = 0;
+  const readDance = (time: number, energy: Float32Array, motion: Float32Array) => {
+    for (let lane = 0; lane < 3; lane++)
+      if ((energy[lane * 4] ?? 0) > (energy[danceLeader * 4] ?? 0) * 1.25 + 0.01)
+        danceLeader = lane;
+    const e = danceLeader * 4;
+    const dt = dancePrevious === undefined ? 0 : time - dancePrevious;
+    dancePrevious = time;
+    const fallback = danceMotion.update(
+      motion[e + 3] ?? 0,
+      energy[e] ?? 0,
+      energy[e + 1] ?? 0,
+      energy[e + 2] ?? 0,
+      energy[e + 3] ?? 0,
+      dt,
+    );
+    return suppliedDance ?? fallback;
+  };
   const renderer = new THREE.WebGLRenderer({
     antialias: false,
     powerPreference: "high-performance",
@@ -38,7 +61,7 @@ export async function createRaceBooth(host: HTMLCanvasElement) {
   scene.fog = fog;
   const camera = new THREE.PerspectiveCamera(82, 1, 0.12, 320);
   scene.add(camera);
-  scene.add(new THREE.HemisphereLight(0xd9e8ff, 0x140828, 2));
+  scene.add(new THREE.HemisphereLight(0xc4b6ef, 0x241024, 1.7));
   const light = new THREE.DirectionalLight(0xffffff, 4);
   light.position.set(-8, 12, 8);
   camera.add(light);
@@ -47,7 +70,7 @@ export async function createRaceBooth(host: HTMLCanvasElement) {
 
   const composer = new EffectComposer(renderer);
   const renderPass = new RenderPass(scene, camera);
-  const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.65, 0.5, 0.85);
+  const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.4, 0.35, 1.05);
   const output = new OutputPass();
   composer.addPass(renderPass);
   composer.addPass(bloom);
@@ -72,9 +95,9 @@ export async function createRaceBooth(host: HTMLCanvasElement) {
   const laneColors = [new THREE.Color(), new THREE.Color(), new THREE.Color()];
   const levels = [0, 0, 0];
   const pulses = [0, 0, 0];
-  const weights = [0, 1, 0, 0];
+  const weights = [1, 0, 0, 0];
   const reduced = matchMedia("(prefers-reduced-motion: reduce)");
-  let target = initialVisualLook("race");
+  let target: VisualLook = { ...initialVisualLook("race"), theme: "halloween", halloween: 1 };
   const look = { ...target };
   const geometries = new Set<THREE.BufferGeometry>();
   const materials = new Set<THREE.Material>();
@@ -103,64 +126,115 @@ export async function createRaceBooth(host: HTMLCanvasElement) {
     });
   }
 
-  // Shared procedural hull pieces: swept wings, split engines and an amber canopy.
-  const hullGeometry = new THREE.ConeGeometry(0.7, 3.5, 4);
-  hullGeometry.rotateX(-Math.PI / 2);
-  const wingGeometry = new THREE.BoxGeometry(1, 1, 1);
-  const canopyGeometry = new THREE.SphereGeometry(0.48, 4, 3);
-  const exhaustGeometry = new THREE.ConeGeometry(0.22, 1.7, 8);
-  exhaustGeometry.rotateX(Math.PI / 2);
-  [hullGeometry, wingGeometry, canopyGeometry, exhaustGeometry].forEach((g) => geometries.add(g));
-  const engineMaterial = new THREE.MeshBasicMaterial({ color: 0x8af9ff });
-  const canopyMaterial = new THREE.MeshPhongMaterial({
-    color: 0x713611,
-    emissive: 0x2a1004,
-    flatShading: true,
-    shininess: 100,
-  });
-  materials.add(engineMaterial);
-  materials.add(canopyMaterial);
-  function ship(paint: number) {
-    const group = new THREE.Group();
-    const hullMaterial = new THREE.MeshPhongMaterial({
-      color: paint,
-      shininess: 100,
-      specular: 0x41525d,
-      flatShading: true,
-    });
-    materials.add(hullMaterial);
-    const hull = new THREE.Mesh(hullGeometry, hullMaterial);
-    hull.scale.set(0.8, 0.55, 1);
-    group.add(hull);
-    const canopy = new THREE.Mesh(canopyGeometry, canopyMaterial);
-    canopy.position.set(0, 0.3, -0.35);
-    canopy.scale.set(0.65, 0.65, 1.45);
-    group.add(canopy);
-    const flames: THREE.Mesh[] = [];
-    for (const side of [-1, 1]) {
-      const wing = new THREE.Mesh(wingGeometry, hullMaterial);
-      wing.position.set(side * 0.85, -0.08, 0.45);
-      wing.scale.set(1.6, 0.12, 1.15);
-      wing.rotation.y = side * -0.45;
-      group.add(wing);
-      const engine = new THREE.Mesh(wingGeometry, hullMaterial);
-      engine.position.set(side * 1.25, 0, 0.7);
-      engine.scale.set(0.36, 0.36, 1.7);
-      group.add(engine);
-      const trim = new THREE.Mesh(wingGeometry, engineMaterial);
-      trim.position.set(side * 1.25, 0.19, 0.7);
-      trim.scale.set(0.08, 0.025, 1.2);
-      group.add(trim);
-      const flame = new THREE.Mesh(exhaustGeometry, engineMaterial);
-      flame.position.set(side * 1.25, 0, 2);
-      group.add(flame);
-      flames.push(flame);
-    }
-    scene.add(group);
-    return { group, flames };
+  // Pumpkin captains and spectral passengers ride the existing authored airframes.
+  const pumpkinGeometry = new THREE.SphereGeometry(0.75, 32, 20);
+  const pumpkinVertices = pumpkinGeometry.getAttribute("position");
+  for (let i = 0; i < pumpkinVertices.count; i++) {
+    const x = pumpkinVertices.getX(i),
+      y = pumpkinVertices.getY(i),
+      z = pumpkinVertices.getZ(i);
+    const rib = 1 + Math.cos(Math.atan2(z, x) * 10) * 0.085;
+    pumpkinVertices.setXYZ(i, x * rib, y, z * rib);
   }
-  const player = ship(0x2e5265);
-  const rivals = [ship(0xe35081), ship(0x98ef54), ship(0xb68aff)];
+  pumpkinGeometry.computeVertexNormals();
+  const ghostHeadGeometry = new THREE.SphereGeometry(0.54, 20, 14);
+  const ghostSkirtGeometry = new THREE.CylinderGeometry(0.35, 0.66, 0.75, 24, 5, true);
+  const skirtVertices = ghostSkirtGeometry.getAttribute("position");
+  for (let i = 0; i < skirtVertices.count; i++) {
+    const y = skirtVertices.getY(i);
+    if (y < -0.2)
+      skirtVertices.setY(
+        i,
+        y + Math.sin(Math.atan2(skirtVertices.getZ(i), skirtVertices.getX(i)) * 6) * 0.085,
+      );
+  }
+  ghostSkirtGeometry.computeVertexNormals();
+  const eyeGeometry = new THREE.SphereGeometry(1, 12, 8);
+  const captainStem = new THREE.CylinderGeometry(0.08, 0.12, 0.28, 7);
+  const captainGrin = new THREE.TorusGeometry(0.3, 0.055, 5, 16, Math.PI);
+  const captainEye = new THREE.ConeGeometry(0.14, 0.23, 3);
+  const captainSkin = new THREE.MeshStandardMaterial({
+    color: 0xf47722,
+    roughness: 0.56,
+    metalness: 0.1,
+  });
+  const shroud = new THREE.MeshStandardMaterial({
+    color: 0xc9e8d6,
+    emissive: 0x224938,
+    emissiveIntensity: 0.4,
+    roughness: 0.7,
+    side: THREE.DoubleSide,
+  });
+  const faceDark = new THREE.MeshBasicMaterial({ color: 0x160c20 });
+  const faceGlow = new THREE.MeshBasicMaterial({ color: 0xffd585 });
+  const stalkMaterial = new THREE.MeshStandardMaterial({ color: 0x697344, roughness: 0.9 });
+  [
+    pumpkinGeometry,
+    ghostHeadGeometry,
+    ghostSkirtGeometry,
+    eyeGeometry,
+    captainStem,
+    captainGrin,
+    captainEye,
+  ].forEach((g) => geometries.add(g));
+  [captainSkin, shroud, faceDark, faceGlow, stalkMaterial].forEach((m) => materials.add(m));
+  function captain(ghost: boolean) {
+    const mascot = new THREE.Group();
+    mascot.name = ghost ? "spectral passenger" : "jack-o-lantern captain";
+    const head = new THREE.Mesh(
+      ghost ? ghostHeadGeometry : pumpkinGeometry,
+      ghost ? shroud : captainSkin,
+    );
+    head.scale.set(0.9, ghost ? 1.15 : 0.8, 0.85);
+    head.position.y = 0.9;
+    mascot.add(head);
+    if (ghost) {
+      const skirt = new THREE.Mesh(ghostSkirtGeometry, shroud);
+      skirt.position.y = 0.48;
+      mascot.add(skirt);
+    } else {
+      const stalk = new THREE.Mesh(captainStem, stalkMaterial);
+      stalk.position.set(0, 1.59, 0);
+      stalk.rotation.z = -0.25;
+      mascot.add(stalk);
+    }
+    for (const side of [-1, 1]) {
+      const socket = new THREE.Mesh(ghost ? eyeGeometry : captainEye, faceDark);
+      socket.position.set(side * 0.22, 1.0, ghost ? 0.4 : 0.6);
+      if (ghost) socket.scale.set(0.105, 0.16, 0.06);
+      mascot.add(socket);
+      if (!ghost) {
+        const ember = new THREE.Mesh(captainEye, faceGlow);
+        ember.position.copy(socket.position);
+        ember.position.z += 0.015;
+        ember.scale.setScalar(0.68);
+        mascot.add(ember);
+      }
+    }
+    const mouth = new THREE.Mesh(ghost ? eyeGeometry : captainGrin, ghost ? faceDark : faceGlow);
+    mouth.position.set(0, 0.75, ghost ? 0.43 : 0.61);
+    if (ghost) mouth.scale.set(0.085, 0.13, 0.04);
+    else mouth.rotation.z = Math.PI;
+    mascot.add(mouth);
+    return mascot;
+  }
+  // Retain the authored beveled airframe and share its resource ownership with this scene.
+  function ship(paint: number, ghost = false) {
+    const vessel = createArcadeRacer(paint, geometries, materials);
+    const mascot = captain(ghost);
+    vessel.group.add(mascot);
+    for (const flame of vessel.flames) {
+      const exhaust = flame.material as THREE.MeshBasicMaterial;
+      exhaust.color.setHex(ghost ? 0x9affcf : 0xc78cff);
+    }
+    scene.add(vessel.group);
+    const wings = vessel.group.children.filter(
+      (part) => part.name === "Swept stabilizer" || part.name === "Wing racing flash",
+    );
+    return { ...vessel, wings, mascot };
+  }
+  const player = ship(0xf07824);
+  const rivals = [ship(0x92d7b2, true), ship(0x945ac8), ship(0xc8b4e8, true)];
   // Distant stars and faceted, wireframe asteroids evoke vector arcade cabinets.
   const skyGeometry = new THREE.BufferGeometry();
   const skyPositions = new Float32Array(480 * 3);
@@ -193,9 +267,9 @@ export async function createRaceBooth(host: HTMLCanvasElement) {
   const checkpointFlags = instances(new THREE.BoxGeometry(0.9, 0.55, 0.12), glowMaterial(), 24);
   const hud = document.createElement("div");
   hud.className = "race-hud";
-  hud.setAttribute("aria-label", "Space race telemetry");
+  hud.setAttribute("aria-label", "Halloween race telemetry");
   hud.innerHTML =
-    '<span class="race-title"><small>1UP · AUDIO + CROWD</small><b>SPACE RACE \'86</b></span><span><small>Speed</small><b></b></span><span><small>Position</small><b></b></span><span><small>Lap / gate</small><b></b></span><span><small>Beat boost</small><b></b></span>';
+    '<span class="race-title"><small>1UP · AUDIO + CROWD</small><b>MIDNIGHT GHOST RACE</b></span><span><small>Speed</small><b></b></span><span><small>Position</small><b></b></span><span><small>Lap / gate</small><b></b></span><span><small>Beat boost</small><b></b></span>';
   const hudValues = hud.querySelectorAll("b");
   let lastHud = -1;
 
@@ -291,14 +365,16 @@ export async function createRaceBooth(host: HTMLCanvasElement) {
     GATES * 2,
   );
   const pumpkins = instances(
-    new THREE.SphereGeometry(0.75, 12, 8),
+    pumpkinGeometry,
     new THREE.MeshPhongMaterial({ color: 0xff6d12, shininess: 35, transparent: true }),
     GATES * 2,
   );
   const eyes = instances(new THREE.ConeGeometry(0.16, 0.28, 3), glowMaterial(), GATES * 4);
+  const pumpkinGrins = instances(captainGrin, glowMaterial(), GATES * 2);
+  const pumpkinStems = instances(captainStem, stalkMaterial, GATES * 2);
   const pylons = instances(bar, glowMaterial(), GATES * 2);
 
-  // A distant banded sunset carries the 80s motif above the racing line.
+  // A cratered harvest moon anchors the haunted horizon above the racing line.
   const sunsetMaterial = new THREE.ShaderMaterial({
     transparent: true,
     depthWrite: false,
@@ -308,9 +384,12 @@ export async function createRaceBooth(host: HTMLCanvasElement) {
       void main() {
         vec2 p=vUv*2.-1.; float r=length(p);
         float disc=1.-smoothstep(.96,1.,r);
-        float bands=mix(step(.28,fract(vUv.y*15.)),1.,smoothstep(.48,.65,vUv.y));
-        vec3 color=mix(vec3(1.,.04,.25),vec3(1.,.63,.07),vUv.y)*1.5;
-        gl_FragColor=vec4(color,disc*bands*strength);
+        float craters=sin(p.x*12.+sin(p.y*7.))*sin(p.y*9.-p.x*3.);
+        float dust=sin(p.x*73.+p.y*23.)*sin(p.y*89.)*.035;
+        float limb=sqrt(max(0.,1.-r*r));
+        vec3 color=mix(vec3(.17,.07,.045),vec3(.76,.43,.19),.52+craters*.3+dust);
+        color*=.5+limb*.5;
+        gl_FragColor=vec4(color,disc*strength);
       }`,
   });
   const sunsetGeometry = new THREE.PlaneGeometry(120, 120);
@@ -368,6 +447,9 @@ export async function createRaceBooth(host: HTMLCanvasElement) {
   host.style.visibility = "hidden";
 
   return {
+    setDance(value: MusicDance) {
+      suppliedDance = value;
+    },
     setCrowdMotion(input: { active: boolean; energy: number; steering: number }) {
       crowd = { ...input };
     },
@@ -375,11 +457,11 @@ export async function createRaceBooth(host: HTMLCanvasElement) {
       const bounded = (value: number, min: number, max: number, fallback: number) =>
         Number.isFinite(value) ? THREE.MathUtils.clamp(value, min, max) : fallback;
       target = {
-        theme: THEMES.includes(next.theme) ? next.theme : target.theme,
+        theme: "halloween",
         intensity: bounded(next.intensity, 0, 2, target.intensity),
         motion: bounded(next.motion, 0, 2, target.motion),
         density: bounded(next.density, 0.1, 1, target.density),
-        halloween: bounded(next.halloween, 0, 1, target.halloween),
+        halloween: 1,
       };
     },
     draw(time: number, rgba: Uint8Array, energy: Float32Array, motion: Float32Array) {
@@ -403,6 +485,8 @@ export async function createRaceBooth(host: HTMLCanvasElement) {
       }
       const dt = previousTime === undefined ? 0 : Math.min(0.05, Math.max(0, time - previousTime));
       previousTime = time;
+      const dance = readDance(time, energy, motion);
+      const danceAmount = reduced.matches ? 0 : Math.min(2, Math.max(0, look.motion));
       const blend = 1 - Math.exp(-dt * 3);
       for (const key of ["intensity", "motion", "density", "halloween"] as const)
         look[key] += (target[key] - look[key]) * blend;
@@ -451,7 +535,7 @@ export async function createRaceBooth(host: HTMLCanvasElement) {
       camera.up.set(0, 1, 0).applyQuaternion(rotation);
       camera.lookAt(ahead);
       sky.position.copy(camera.position);
-      const fov = 72 + (reduced.matches ? 0 : drive.boost > 0 ? 4 : 0);
+      const fov = 72;
       camera.fov += (fov - camera.fov) * blend;
       camera.updateProjectionMatrix();
       function placeShip(vessel: typeof player, distance: number, lane: number, isPlayer: boolean) {
@@ -461,18 +545,27 @@ export async function createRaceBooth(host: HTMLCanvasElement) {
           .add(offset.set(lane, ROAD_Y + 1.1, 0).applyQuaternion(rotation));
         vessel.group.quaternion.copy(rotation);
         if (!reduced.matches && target.motion > 0) {
-          vessel.group.rotateZ(isPlayer ? -drive.lane * 0.055 : Math.sin(t + lane) * 0.04);
+          vessel.group.rotateZ(
+            (isPlayer ? -drive.lane * 0.055 : 0) + dance.sway * danceAmount * 0.035,
+          );
+          vessel.group.rotateX(dance.nod * danceAmount * 0.025);
           vessel.group.position.add(
-            offset
-              .set(0, Math.sin(t * 3 + lane) * 0.06 * (1 + drive.crowdEnergy), 0)
-              .applyQuaternion(rotation),
+            offset.set(0, dance.bounce * danceAmount * 0.16, 0).applyQuaternion(rotation),
           );
         }
+        vessel.mascot.rotation.y = dance.twist * danceAmount * 0.12;
+        vessel.mascot.rotation.z = dance.sway * danceAmount * 0.06;
+        vessel.wings.forEach((wing, i) => {
+          wing.rotation.z = (i < 2 ? -1 : 1) * dance.tap * danceAmount * 0.035;
+        });
         for (const flame of vessel.flames)
           flame.scale.z =
             reduced.matches || target.motion === 0
               ? 0.6
-              : 0.8 + activity * 0.5 + (isPlayer && drive.boost > 0 ? 1.3 : 0);
+              : 0.8 +
+                activity * 0.5 +
+                dance.kick * danceAmount * 0.35 +
+                (isPlayer && drive.boost > 0 ? 1.3 : 0);
       }
       placeShip(player, travel, drive.lane, true);
       for (let i = 0; i < rivals.length; i++) {
@@ -522,16 +615,16 @@ export async function createRaceBooth(host: HTMLCanvasElement) {
       for (let theme = 0; theme < THEMES.length; theme++)
         background.add(color.copy(baseBackgrounds[theme]!).multiplyScalar(weights[theme]!));
       fog.color.copy(background);
-      bloom.strength = 0.45 + look.intensity * 0.2;
+      bloom.strength = 0.27 + look.intensity * 0.13;
       roadMaterial.color.copy(background).multiplyScalar(2.5);
       for (let lane = 0; lane < 3; lane++) {
         railMaterials[lane]!.color.copy(laneColors[lane]!).multiplyScalar(
-          1.2 + levels[lane]! * look.intensity,
+          0.85 + levels[lane]! * look.intensity * 0.45,
         );
         railMaterials[lane]!.opacity = Math.min(1, look.intensity);
       }
-      sunsetMaterial.uniforms.strength!.value = weights[1]! * Math.min(1, look.intensity);
-      sunset.visible = weights[1]! > 0.002;
+      sunsetMaterial.uniforms.strength!.value = Math.min(1, look.intensity) * 0.85;
+      sunset.visible = true;
 
       const firstStation = Math.floor(travel / spacing) - 2;
       for (let theme = 0; theme < THEMES.length; theme++) {
@@ -543,7 +636,8 @@ export async function createRaceBooth(host: HTMLCanvasElement) {
       sleepers.material.opacity = look.intensity * (0.22 + weights[1]! * 0.25);
       lamps.material.opacity = look.intensity * 0.6;
       pumpkins.material.opacity = weights[0]! * look.halloween * Math.min(1, look.intensity);
-      eyes.material.opacity = pumpkins.material.opacity;
+      eyes.material.opacity = pumpkinGrins.material.opacity = pumpkins.material.opacity;
+      pumpkinGrins.visible = pumpkinStems.visible = pumpkins.material.opacity > 0.002;
       pumpkins.visible = eyes.visible = pumpkins.material.opacity > 0.002;
       stars.material.opacity = weights[2]! * Math.min(1, look.intensity);
       stars.visible = stars.material.opacity > 0.002;
@@ -638,6 +732,23 @@ export async function createRaceBooth(host: HTMLCanvasElement) {
               color.setRGB(2.2, 1.5, 0.15).multiplyScalar(fade * density),
             );
           }
+          dummy.position
+            .copy(position)
+            .add(offset.set(sign * 7, -2.85, 0.66).applyQuaternion(rotation));
+          dummy.quaternion.copy(rotation);
+          dummy.rotateZ(Math.PI);
+          dummy.scale.setScalar(1);
+          dummy.updateMatrix();
+          pumpkinGrins.setMatrixAt(n, dummy.matrix);
+          pumpkinGrins.setColorAt(n, color.setRGB(1.4, 0.8, 0.2).multiplyScalar(fade * density));
+          dummy.position
+            .copy(position)
+            .add(offset.set(sign * 7, -1.97, 0).applyQuaternion(rotation));
+          dummy.quaternion.copy(rotation);
+          dummy.scale.setScalar(1);
+          dummy.updateMatrix();
+          pumpkinStems.setMatrixAt(n, dummy.matrix);
+          pumpkinStems.setColorAt(n, color.setScalar(fade * density));
           dummy.position
             .copy(position)
             .add(offset.set(sign * 7.6, 1.6, 0).applyQuaternion(rotation));

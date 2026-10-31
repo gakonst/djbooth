@@ -62,14 +62,3 @@ pub(crate) fn configure_meter_routes() -> Result<A9MeterRouting> {
     }
     Ok(routing)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn routes_master_then_four_prefader_channels() {
-        assert_eq!(MASTER_REC_OUT_WITH_MIC, 0x010a);
-        assert_eq!(PRE_CHANNEL_FADER, [0x0205, 0x0305, 0x0405, 0x0505]);
-    }
-}

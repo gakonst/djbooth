@@ -296,5 +296,5 @@ await attachCdjUsb();
 console.log(await statusCdjUsb());
 ```
 
-`DJBOOTH_CDJ_USB_BINARY` selects an explicit native helper. Tests and board bring-up can override
+`DJBOOTH_CDJ_USB_BINARY` selects an explicit native helper. Board bring-up can override
 `stateDir`, `configfsRoot`, and `udcRoot`; normal deployments should retain the root-owned defaults.

@@ -1,9 +1,36 @@
+import { createDanceMotion, type MusicDance } from "./music-dance.js";
 import * as THREE from "three";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import { DEFAULT_VISUAL_LOOK, type VisualLook } from "./visual-presets.js";
 
 /** Original procedural jungle runner scenery; no game assets are used. */
 export async function createTempleRunBooth(host: HTMLCanvasElement) {
+  const danceMotion = createDanceMotion();
+  let suppliedDance: MusicDance | undefined;
+  let dancePrevious: number | undefined;
+  let danceLeader = 0;
+  const readDance = (
+    time: number,
+    energy: Float32Array,
+    motion: Float32Array,
+    audible?: Float32Array,
+  ) => {
+    for (let lane = 0; lane < 3; lane++)
+      if ((energy[lane * 4] ?? 0) > (energy[danceLeader * 4] ?? 0) * 1.25 + 0.01)
+        danceLeader = lane;
+    const e = danceLeader * 4;
+    const dt = dancePrevious === undefined ? 0 : time - dancePrevious;
+    dancePrevious = time;
+    const fallback = danceMotion.update(
+      motion[e + 3] ?? 0,
+      audible?.[danceLeader] ?? Math.max(0, (energy[e] ?? 0) - 0.06),
+      energy[e + 1] ?? 0,
+      energy[e + 2] ?? 0,
+      energy[e + 3] ?? 0,
+      dt,
+    );
+    return suppliedDance ?? fallback;
+  };
   const renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.domElement.className = "booth-visuals temple-run-booth";
   renderer.domElement.dataset.renderer = "three-temple-run";
@@ -48,22 +75,22 @@ export async function createTempleRunBooth(host: HTMLCanvasElement) {
   }
   const stoneTexture = new THREE.CanvasTexture(surface);
   const stone = new THREE.MeshStandardMaterial({
-    color: 0x9d8060,
+    color: 0x8f7b86,
     map: stoneTexture,
     bumpMap: stoneTexture,
     bumpScale: 0.14,
     roughness: 0.95,
   });
   const darkStone = new THREE.MeshStandardMaterial({
-    color: 0x655459,
+    color: 0x494354,
     map: stoneTexture,
     bumpMap: stoneTexture,
     bumpScale: 0.18,
     roughness: 1,
   });
-  const moss = new THREE.MeshStandardMaterial({ color: 0x475326, roughness: 1 });
+  const moss = new THREE.MeshStandardMaterial({ color: 0x40513c, roughness: 1 });
   const gold = new THREE.MeshStandardMaterial({
-    color: 0xffcc54,
+    color: 0xe8b766,
     emissive: 0xe68a15,
     emissiveIntensity: 0.6,
     metalness: 0.75,
@@ -75,7 +102,7 @@ export async function createTempleRunBooth(host: HTMLCanvasElement) {
   const black = new THREE.MeshBasicMaterial({ color: 0x100911 });
   const pumpkinMaterial = new THREE.MeshStandardMaterial({ color: 0xe65d0d, roughness: 0.75 });
   const ectoplasm = new THREE.MeshBasicMaterial({ color: 0xa8ff39 });
-  const sphere = new THREE.SphereGeometry(1, 12, 8);
+  const sphere = new THREE.SphereGeometry(1, 18, 12);
   const spikeGeometry = new THREE.ConeGeometry(0.17, 1.3, 5);
   const box = new THREE.BoxGeometry(1, 1, 1);
   const coin = new THREE.TorusGeometry(0.27, 0.09, 6, 12);
@@ -155,6 +182,21 @@ export async function createTempleRunBooth(host: HTMLCanvasElement) {
       for (let rib = 0; rib < 4; rib++)
         block(root, moss, side * 6.2, 1.8 + rib * 1.7, 0.92, 1.6, 0.16, 0.1);
       block(root, darkStone, side * 4.6, 2.9, 0, 0.35, 0.35, 0.65);
+      // Layered iron braziers and wax votives are merged with the static masonry.
+      block(root, darkStone, side * 4.6, 3.03, 0, 0.6, 0.12, 0.6);
+      for (let candle = 0; candle < 3; candle++) {
+        const cx = side * (5.1 + candle * 0.3);
+        const cy = 0.45 + candle * 0.11;
+        block(root, bone, cx, cy, 1.4, 0.12, cy * 2, 0.12);
+        const wick = new THREE.Mesh(flame, fire);
+        wick.position.set(cx, cy * 2 + 0.09, 1.4);
+        wick.scale.set(0.16, 0.4, 0.16);
+        root.add(wick);
+      }
+      for (let carving = 0; carving < 5; carving++) {
+        const inset = block(root, gold, side * 6.2, 2 + carving * 0.74, 0.88, 0.22, 0.22, 0.05);
+        inset.rotation.z = Math.PI / 4;
+      }
       const torch = new THREE.Mesh(flame, fire);
       torch.position.set(side * 4.6, 3.4, 0);
       root.add(torch);
@@ -234,6 +276,12 @@ export async function createTempleRunBooth(host: HTMLCanvasElement) {
       )
         return;
       const geometry = object.geometry.clone().applyMatrix4(object.matrixWorld);
+      // Polyhedra (votive flames) are unindexed while masonry and spheres are indexed.
+      // Normalize indexing before merging; otherwise the entire material bucket is dropped.
+      if (!geometry.index) {
+        const vertices = geometry.getAttribute("position").count;
+        geometry.setIndex(Array.from({ length: vertices }, (_, index) => index));
+      }
       const bucket = buckets.get(object.material) ?? [];
       bucket.push(geometry);
       buckets.set(object.material, bucket);
@@ -265,7 +313,7 @@ export async function createTempleRunBooth(host: HTMLCanvasElement) {
         float cracks=abs(sin(p.x+sin(p.y*.7+flow)*1.8)*sin(p.y*.8-flow+sin(p.x)));
         float glow=1.-smoothstep(.02,.16,cracks);
         vec3 color=mix(vec3(.06,.009,.014),vec3(1.,.22,.006),glow);
-        color+=vec3(.6,.11,.004)*pow(glow,5.);color*=1.+beat*1.6;
+        color+=vec3(.6,.11,.004)*pow(glow,5.);color*=1.+beat*.55;
         float fog=1.-exp(-length(world.xz)*.016);
         gl_FragColor=vec4(mix(color,vec3(.07,.025,.08),fog),1.);}`,
   });
@@ -336,6 +384,9 @@ export async function createTempleRunBooth(host: HTMLCanvasElement) {
   host.after(renderer.domElement);
   host.style.visibility = "hidden";
   return {
+    setDance(value: MusicDance) {
+      suppliedDance = value;
+    },
     setLook(value: VisualLook) {
       look = { ...value };
     },
@@ -357,6 +408,7 @@ export async function createTempleRunBooth(host: HTMLCanvasElement) {
       }
       const dt = previous ? Math.min(0.1, Math.max(0, time - previous)) : 0;
       previous = time;
+      const dance = readDance(time, energy, motion, audibleLevels);
       const levels = [0, 1, 2].map((lane) => {
         // Use the actual program level, separate from the visual-only cue glow.
         const level = audibleLevels?.[lane] ?? Math.max(0, (energy[lane * 4] ?? 0) - 0.06);
@@ -416,7 +468,7 @@ export async function createTempleRunBooth(host: HTMLCanvasElement) {
         1 - Math.exp(-dt * (targetSpeed > speed ? 6 : 10)),
       );
       if (targetSpeed < 0.01 && speed < 0.4) speed = 0;
-      const pulse = beats.map((beat, lane) => Math.exp(-wrap(beat, 1) * 9) * levels[lane]!);
+
       const beatRunning = Math.min(1, beatRates[leader]! * 2);
       const targetPulse = Math.exp(-wrap(beats[leader]!, 1) * 4.5) * drive * beatRunning;
       worldPulse = THREE.MathUtils.lerp(
@@ -447,50 +499,43 @@ export async function createTempleRunBooth(host: HTMLCanvasElement) {
         section.root.position.x = turn * Math.pow(distance / 102, 2) * 18 * movement;
         section.root.rotation.y = Math.atan((-36 * turn * distance * movement) / (102 * 102));
         section.root.rotation.z = -turn * (distance / 102) * 0.014 * movement;
-        // The entire course breathes together: masonry, skulls, trees and road.
-        section.root.scale.set(1 + physicalPulse * 0.075, 1 + physicalPulse * 0.085, 1);
+        // Keep the navigable road rigid; local props carry the musical choreography.
+        section.root.scale.set(1, 1, 1);
         for (let lane = 0; lane < 3; lane++) {
           const waveform = (rgba[(lane * 256 + ((i * 13) % 256)) * 4 + 3] ?? 0) / 255;
           const token = section.coins[lane]!;
-          token.rotation.y = beats[lane]! * Math.PI * movement;
+          token.rotation.y = dance.twist * Math.PI * movement;
           token.position.y =
-            1.25 +
-            Math.sin(beats[lane]! * Math.PI * 2 + i) * levels[lane]! * 0.12 * movement +
-            waveform * (energy[lane * 4] ?? 0) * 0.65;
-          section.runes[lane]!.scale.setScalar(0.35 * (1 + (pulse[lane] ?? 0) * look.intensity));
+            1.25 + dance.bounce * 0.25 * movement + waveform * (energy[lane * 4] ?? 0) * 0.65;
+          section.runes[lane]!.rotation.z = Math.PI / 4 + dance.sway * movement * 0.18;
+          section.runes[lane]!.scale.setScalar(0.35 * (1 + dance.tap * movement * 0.15));
         }
         for (let j = 0; j < section.flames.length; j++) {
           section.flames[j]!.scale.set(
             1,
-            1.4 +
-              (pulse[j * 2] ?? 0) * 1.5 +
-              Math.sin(musicalTime * Math.PI * 4 + i) * activity * 0.15 * movement,
+            1.4 + dance.kick * movement * 0.5 + dance.tap * movement * 0.2,
             1,
           );
         }
         const bat = bats[i]!;
-        bat.position.x = Math.sin(musicalTime * Math.PI + i * 2) * 4.5 * movement;
-        bat.position.y = 7.4 + Math.sin(musicalTime * Math.PI * 2 + i) * 0.8 * movement;
+        bat.position.x = (i % 2 ? -1 : 1) * 4 + dance.sway * 0.45 * movement;
+        bat.position.y = 7.4 + dance.bounce * 0.45 * movement;
         bat.children.forEach((wing, side) => {
-          wing.rotation.y =
-            Math.sin(musicalTime * Math.PI * 8 + i) * (side ? -0.8 : 0.8) * movement;
+          wing.rotation.y = dance.nod * (side ? -0.8 : 0.8) * movement;
         });
       }
       camera.position.set(turn * 1.4 * movement, 3.7, 13);
       camera.lookAt(turn * 6 * movement, 5.7, -48);
       camera.rotateZ(-turn * 0.022 * movement);
-      const fov = THREE.MathUtils.lerp(
-        camera.fov,
-        88 + activity * 6 * movement + physicalPulse * 2.2,
-        1 - Math.exp(-dt * 7),
-      );
+      const fov = THREE.MathUtils.lerp(camera.fov, 88, 1 - Math.exp(-dt * 7));
       if (Math.abs(camera.fov - fov) > 0.1) {
         camera.fov = fov;
         camera.updateProjectionMatrix();
       }
-      relic.rotation.y = musicalTime * 0.4;
-      relic.position.y = 7 + Math.sin(musicalTime) * 0.4 * movement;
-      relic.scale.setScalar(4 * (1 + physicalPulse * 0.22));
+      relic.rotation.y = dance.twist * movement * 0.4;
+      relic.rotation.z = dance.sway * movement * 0.12;
+      relic.position.y = 7 + dance.bounce * 0.4 * movement;
+      relic.scale.setScalar(4 * (1 + dance.kick * movement * 0.04));
       gold.emissiveIntensity = 0.45 + activity * look.intensity + impact * 2.5;
       stone.emissive.setHex(0x70300c);
       stone.emissiveIntensity = impact * 0.45;

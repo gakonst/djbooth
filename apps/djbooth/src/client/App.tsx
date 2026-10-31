@@ -1,3 +1,4 @@
+import { cloudAppendPlaylistTracks, cloudAudioUrl, isCloudWorkstation } from "./cloud-library.js";
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AudioLines,
@@ -226,13 +227,15 @@ export function App({ assistantEnabled = true }: AppProps) {
   const playerAdapter = useMemo<PlayerAdapter>(
     () => ({
       getAudioUrl: (track) =>
-        track.usb
-          ? `/api/usb-audio/${encodeURIComponent(track.id)}`
-          : track.hosted?.provider === "soundcloud"
-            ? `/api/hosted-audio/${encodeURIComponent(track.id)}`
-            : track.hosted
-              ? undefined
-              : `/api/audio/${encodeURIComponent(track.id)}`,
+        isCloudWorkstation()
+          ? cloudAudioUrl(track.id)
+          : track.usb
+            ? `/api/usb-audio/${encodeURIComponent(track.id)}`
+            : track.hosted?.provider === "soundcloud"
+              ? `/api/hosted-audio/${encodeURIComponent(track.id)}`
+              : track.hosted
+                ? undefined
+                : `/api/audio/${encodeURIComponent(track.id)}`,
       getArtworkUrl: (track) =>
         track.hosted || track.usb ? undefined : `/api/artwork/${encodeURIComponent(track.id)}`,
       loadWaveform: (track) =>
@@ -998,6 +1001,65 @@ export function App({ assistantEnabled = true }: AppProps) {
       applyMutation({ type: "add-track", playlistId: editingPlaylist.id, contentId });
     },
     [applyMutation, commitHostedPlaylistTracks, editingPlaylist, editingTracksQuery.data?.items],
+  );
+
+  const sidebarDropInFlight = useRef(false);
+  const appendSidebarTracks = useCallback(
+    async (playlist: PlaylistItem, trackIds: string[]) => {
+      if (sidebarDropInFlight.current) {
+        setToast({ tone: "error", message: "Wait for the current playlist drop to finish." });
+        return;
+      }
+      if (playlist.type !== "playlist" || playlist.hosted || playlist.usb) return;
+      if (!canWrite && !isCloudWorkstation()) return;
+      sidebarDropInFlight.current = true;
+      let added = 0;
+      try {
+        const sources = [...tracks, ...(editingTracksQuery.data?.items ?? [])];
+        const contentIds = [...new Set(trackIds)].map((id) => {
+          const track = sources.find((item) => item.id === id);
+          const contentId = track && !track.usb ? localTrackContentId(track) : undefined;
+          if (!contentId)
+            throw new Error("Download provider tracks before adding them to a library playlist.");
+          return contentId;
+        });
+        if (isCloudWorkstation()) {
+          await cloudAppendPlaylistTracks(playlist.id, [...new Set(contentIds)]);
+          await Promise.all([
+            queryClient.invalidateQueries({ queryKey: ["playlists"] }),
+            queryClient.invalidateQueries({ queryKey: ["tracks"] }),
+            queryClient.invalidateQueries({ queryKey: ["playlist-tracks", playlist.id] }),
+          ]);
+          setToast({
+            tone: "success",
+            message: `Updated ${playlist.name}; existing tracks skipped.`,
+          });
+          return;
+        }
+        const current = await queryClient.fetchQuery(playlistTracksQueryOptions(playlist.id));
+        const existing = new Set(current.items.map((track) => track.id));
+        for (const contentId of contentIds) {
+          if (existing.has(contentId)) continue;
+          await applyMutationAsync({ type: "add-track", playlistId: playlist.id, contentId });
+          existing.add(contentId);
+          added += 1;
+        }
+        setToast({
+          tone: "success",
+          message: added
+            ? `Added ${added} track${added === 1 ? "" : "s"} to ${playlist.name}.`
+            : "These tracks are already in the playlist.",
+        });
+      } catch (error) {
+        setToast({
+          tone: "error",
+          message: `${added ? `Added ${added} tracks before stopping. ` : ""}${errorMessage(error)}`,
+        });
+      } finally {
+        sidebarDropInFlight.current = false;
+      }
+    },
+    [applyMutationAsync, canWrite, editingTracksQuery.data?.items, queryClient, tracks],
   );
 
   const applyHistory = useCallback(
@@ -2171,6 +2233,10 @@ export function App({ assistantEnabled = true }: AppProps) {
         loading={playlistsQuery.isLoading}
         open={sidebarOpen}
         canWrite={canWrite}
+        canDropTracks={canWrite || isCloudWorkstation()}
+        onDropTracks={(playlist, ids) => {
+          void appendSidebarTracks(playlist, ids);
+        }}
         onClose={() => setSidebarOpen(false)}
         onSelectPlaylist={(playlistId) => {
           setTemporaryCrate(undefined);
@@ -2245,12 +2311,16 @@ export function App({ assistantEnabled = true }: AppProps) {
             </nav>
           </div>
           <div className="topbar-actions">
-            <a className="view-link" href={assistantEnabled ? "/booth" : "/booth?assistant=0"}>
-              <AudioLines size={14} /> Live booth
-            </a>
-            <a className="view-link" href="/booth?immersive=1">
-              <AudioLines size={14} /> Visuals + decks
-            </a>
+            {!isCloudWorkstation() ? (
+              <>
+                <a className="view-link" href={assistantEnabled ? "/booth" : "/booth?assistant=0"}>
+                  <AudioLines size={14} /> Live booth
+                </a>
+                <a className="view-link" href="/booth?immersive=1">
+                  <AudioLines size={14} /> Visuals + decks
+                </a>
+              </>
+            ) : null}
             <button
               className={`split-editor-button ${dualDeck ? "is-active" : ""}`}
               type="button"
@@ -2484,6 +2554,60 @@ export function App({ assistantEnabled = true }: AppProps) {
             </>
           ) : null}
         </div>
+
+        {isCloudWorkstation() ? (
+          <div className="connection-banner" role="status">
+            <span>Shared library · published tracks and analysis</span>
+            <button
+              className="secondary-button compact-button"
+              type="button"
+              onClick={() => {
+                void navigator.clipboard.writeText(window.location.href).then(
+                  () => setToast({ tone: "success", message: "Library link copied" }),
+                  () =>
+                    setToast({
+                      tone: "error",
+                      message: "Copy the URL from your browser to share this playlist",
+                    }),
+                );
+              }}
+            >
+              Share playlist
+            </button>
+            {urlState.playlistId ? (
+              <button
+                className="secondary-button compact-button"
+                type="button"
+                onClick={() => {
+                  setToast({ tone: "success", message: "Preparing CDJ export…" });
+                  const href = `/v1/usb/export?playlist=${encodeURIComponent(urlState.playlistId!)}`;
+                  void fetch(href, { method: "HEAD" })
+                    .then((response) => {
+                      if (!response.ok) {
+                        throw new Error(
+                          response.status === 501
+                            ? "Cloud USB export is not available yet. Use the local djbooth USB workflow to create a Rekordbox Device Library and OneLibrary export."
+                            : `CDJ export unavailable (${response.status}). Try again after publishing completes.`,
+                        );
+                      }
+                      const link = document.createElement("a");
+                      link.href = href;
+                      link.download = "djbooth-cdj-export.zip";
+                      link.click();
+                      setToast({
+                        tone: "success",
+                        message:
+                          "Extract to the root of an empty FAT32/exFAT USB drive, then safely eject. For an existing library, use local DJBooth USB sync to preserve CDJ histories.",
+                      });
+                    })
+                    .catch((error) => setToast({ tone: "error", message: errorMessage(error) }));
+                }}
+              >
+                Export for CDJs
+              </button>
+            ) : null}
+          </div>
+        ) : null}
 
         {bootstrapQuery.isError ? (
           <div className="connection-banner is-error" role="alert">

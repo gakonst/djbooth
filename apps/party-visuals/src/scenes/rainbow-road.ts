@@ -1,3 +1,5 @@
+import { STILL_DANCE, type MusicDance } from "../../../dj-monitor/src/music-dance.js";
+import { createHauntedKit } from "./haunted-materials.js";
 import * as THREE from "three";
 import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
@@ -26,10 +28,16 @@ vec3 hsv(float h, float s, float v) {
   vec3 k = clamp(abs(mod(h * 6. + vec3(0., 4., 2.), 6.) - 3.) - 1., 0., 1.);
   return v * mix(vec3(1.), k, s);
 }
-// Seven lanes, red on the left through violet on the right.
+// Seven spectral lanes: pumpkin fire, ectoplasm and witch violet.
 vec3 lane(float x) {
-  float band = (floor(clamp(x, 0., .999) * 7.) + .5) / 7.;
-  return hsv(band * .8, .86, 1.);
+  float band = floor(clamp(x, 0., .999) * 7.);
+  if (band < 1.) return vec3(1., .24, .025);
+  if (band < 2.) return vec3(.72, .12, 1.);
+  if (band < 3.) return vec3(.2, 1., .5);
+  if (band < 4.) return vec3(1., .48, .04);
+  if (band < 5.) return vec3(.15, .85, .62);
+  if (band < 6.) return vec3(.5, .16, .9);
+  return vec3(1., .2, .045);
 }`;
 
 const NOISE_GLSL = /* glsl */ `
@@ -48,7 +56,12 @@ float fbm(vec3 p) {
   return sum;
 }`;
 
-type Frame = { point: THREE.Vector3; tangent: THREE.Vector3; up: THREE.Vector3; right: THREE.Vector3 };
+type Frame = {
+  point: THREE.Vector3;
+  tangent: THREE.Vector3;
+  up: THREE.Vector3;
+  right: THREE.Vector3;
+};
 const newFrame = (): Frame => ({
   point: new THREE.Vector3(),
   tangent: new THREE.Vector3(),
@@ -104,7 +117,10 @@ function createBoo() {
     arm.position.set(side * 1.25, -0.2, 0.5);
     boo.add(arm);
   }
-  const mouth = new THREE.Mesh(new THREE.SphereGeometry(0.45, 16, 12, 0, Math.PI * 2, 0, Math.PI / 2), dark);
+  const mouth = new THREE.Mesh(
+    new THREE.SphereGeometry(0.45, 16, 12, 0, Math.PI * 2, 0, Math.PI / 2),
+    dark,
+  );
   mouth.rotation.x = Math.PI;
   mouth.scale.set(1, 0.9, 0.3);
   mouth.position.set(0, -0.25, 1.28);
@@ -121,11 +137,15 @@ function stripGeometry(columns: number) {
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute(
     "position",
-    new THREE.BufferAttribute(new Float32Array(ROWS * (columns + 1) * 3), 3).setUsage(THREE.DynamicDrawUsage),
+    new THREE.BufferAttribute(new Float32Array(ROWS * (columns + 1) * 3), 3).setUsage(
+      THREE.DynamicDrawUsage,
+    ),
   );
   geometry.setAttribute(
     "uv",
-    new THREE.BufferAttribute(new Float32Array(ROWS * (columns + 1) * 2), 2).setUsage(THREE.DynamicDrawUsage),
+    new THREE.BufferAttribute(new Float32Array(ROWS * (columns + 1) * 2), 2).setUsage(
+      THREE.DynamicDrawUsage,
+    ),
   );
   const indices: number[] = [];
   for (let i = 0; i < ROWS - 1; i++)
@@ -140,7 +160,12 @@ function stripGeometry(columns: number) {
 
 /** Mario Kart's Rainbow Road, laid out by the song: its turns, climbs and dives follow the music. */
 export async function createRainbowRoad(host: HTMLCanvasElement): Promise<SceneEngine> {
-  const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+  let dance: MusicDance = STILL_DANCE;
+  const reduced = matchMedia("(prefers-reduced-motion: reduce)");
+  const renderer = new THREE.WebGLRenderer({
+    antialias: true,
+    powerPreference: "high-performance",
+  });
   renderer.domElement.setAttribute("aria-hidden", "true");
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 0.82;
@@ -155,6 +180,7 @@ export async function createRainbowRoad(host: HTMLCanvasElement): Promise<SceneE
   scene.add(sun);
   const disposables: { dispose(): void }[] = [];
   const keep = <T extends { dispose(): void }>(item: T) => (disposables.push(item), item);
+  const haunted = createHauntedKit(keep);
 
   // Everything far away travels with the camera: the course can wander anywhere in space.
   const backdrop = new THREE.Group();
@@ -224,7 +250,10 @@ export async function createRainbowRoad(host: HTMLCanvasElement): Promise<SceneE
 
   const planetMaterial = keep(
     new THREE.ShaderMaterial({
-      uniforms: { time: { value: 0 }, light: { value: new THREE.Vector3(-1, 0.6, 0.8).normalize() } },
+      uniforms: {
+        time: { value: 0 },
+        light: { value: new THREE.Vector3(-1, 0.6, 0.8).normalize() },
+      },
       vertexShader: /* glsl */ `varying vec3 vNormal, vLocal, vView;
         void main() {
           vLocal = normalize(position);
@@ -253,10 +282,23 @@ export async function createRainbowRoad(host: HTMLCanvasElement): Promise<SceneE
   backdrop.add(earth);
   const moon = new THREE.Mesh(
     keep(new THREE.SphereGeometry(90, 48, 32)),
-    keep(new THREE.MeshStandardMaterial({ color: 0xb9b6c4, roughness: 0.95 })),
+    keep(
+      new THREE.MeshStandardMaterial({
+        color: 0xc3b6d6,
+        map: haunted.stone.map,
+        bumpMap: haunted.stone.map,
+        bumpScale: 2,
+        roughness: 0.95,
+      }),
+    ),
   );
   moon.position.set(-1300, 240, -900);
   backdrop.add(moon);
+  const lunarSeal = haunted.seal();
+  lunarSeal.position.copy(moon.position);
+  lunarSeal.position.z += 94;
+  lunarSeal.scale.setScalar(150);
+  backdrop.add(lunarSeal);
 
   // The road and everything on it live in the course's own space, placed by `placement`.
   const course3d = new THREE.Group();
@@ -288,8 +330,16 @@ export async function createRainbowRoad(host: HTMLCanvasElement): Promise<SceneE
           // The shimmer sweeps faster and brighter as the music fills out.
           float shimmer = pow(.5 + .5 * sin(along * .08 - time), 10.) * (.15 + energy * .25);
           float edge = smoothstep(.035, 0., min(x, 1. - x));
-          vec3 lit = color * (.45 + shimmer) * glow + vec3(1.) * (seam * .12 + lines * .04 + edge * .35);
-          float alpha = (.72 + seam * .15 + edge * .2) * smoothstep(span, span * .7, along - head);
+          vec3 copper = vec3(.75, .38, .13);
+          vec3 lit = color * (.18 + shimmer * .55) * glow;
+          lit += mix(copper, vec3(.26, .7, .61), x) * (seam * .08 + lines * .18 + edge * .42);
+          // Etched glass: staggered facets and fine ritual marks remain tied to course distance.
+          float facet = abs(fract(along * .16 + floor(x * 14.) * .5) - .5);
+          float engraving = smoothstep(.025, .005, abs(facet - abs(fract(x * 14.) - .5)));
+          lit += mix(vec3(.18, .8, .64), vec3(.7, .24, .08), x) * engraving * .075 * glow;
+          float grain = fract(sin(dot(floor(vec2(x * 700., along * 13.)), vec2(12.9898, 78.233))) * 43758.5453);
+          lit *= .94 + grain * .06;
+          float alpha = .96 * smoothstep(span, span * .7, along - head);
           gl_FragColor = vec4(lit, alpha);
         }`,
     }),
@@ -319,12 +369,19 @@ export async function createRainbowRoad(host: HTMLCanvasElement): Promise<SceneE
 
   // Rails: a cross-shaped glowing strip on each side, visible from any angle.
   const railMaterial = keep(
-    new THREE.MeshBasicMaterial({ color: new THREE.Color(0.95, 0.78, 0.36), side: THREE.DoubleSide }),
+    new THREE.MeshBasicMaterial({
+      color: new THREE.Color(0.95, 0.78, 0.36),
+      side: THREE.DoubleSide,
+    }),
   );
   const rails = [-1, 1].flatMap((side) =>
     [0, 1].map((flat) => ({ geometry: keep(stripGeometry(1)), side, flat })),
   );
-  const strips = [road, underglow, ...rails.map((rail) => new THREE.Mesh(rail.geometry, railMaterial))];
+  const strips = [
+    road,
+    underglow,
+    ...rails.map((rail) => new THREE.Mesh(rail.geometry, railMaterial)),
+  ];
   for (const strip of strips) {
     // The strips move with the kart; never cull them against a stale bounding sphere.
     strip.frustumCulled = false;
@@ -342,7 +399,7 @@ export async function createRainbowRoad(host: HTMLCanvasElement): Promise<SceneE
     keep(new THREE.MeshBasicMaterial({ color: 0xffffff })),
     postCount,
   );
-  const bulbColors = [0xff4060, 0xffb030, 0xfff060, 0x50ff80, 0x40c8ff, 0xb070ff].map((c) =>
+  const bulbColors = [0xff681a, 0xa44aff, 0x88ff88, 0xff9e20, 0x52ffbd, 0x9955ff].map((c) =>
     new THREE.Color(c).multiplyScalar(1.1),
   );
   for (let i = 0; i < postCount; i++) bulbs.setColorAt(i, bulbColors[0]!);
@@ -370,11 +427,18 @@ export async function createRainbowRoad(host: HTMLCanvasElement): Promise<SceneE
   dashTexture.wrapT = THREE.RepeatWrapping;
   dashTexture.repeat.set(1, 2);
   const dashMaterial = keep(
-    new THREE.MeshBasicMaterial({ map: dashTexture, color: new THREE.Color(1.2, 1.2, 1.2), side: THREE.DoubleSide }),
+    new THREE.MeshBasicMaterial({
+      map: dashTexture,
+      color: new THREE.Color(1.2, 1.2, 1.2),
+      side: THREE.DoubleSide,
+    }),
   );
   const dashGeometry = keep(new THREE.PlaneGeometry(3.6, 7));
   dashGeometry.rotateX(-Math.PI / 2);
-  const dashes = Array.from({ length: 9 }, () => course3d.add(new THREE.Mesh(dashGeometry, dashMaterial)).children.at(-1)!);
+  const dashes = Array.from(
+    { length: 9 },
+    () => course3d.add(new THREE.Mesh(dashGeometry, dashMaterial)).children.at(-1)!,
+  );
 
   const questionTexture = keep(
     canvasTexture(128, (c) => {
@@ -416,7 +480,10 @@ export async function createRainbowRoad(host: HTMLCanvasElement): Promise<SceneE
     }),
   );
   const boxGeometry = keep(new THREE.BoxGeometry(2.2, 2.2, 2.2));
-  const boxes = Array.from({ length: 24 }, () => course3d.add(new THREE.Mesh(boxGeometry, boxMaterial)).children.at(-1)!);
+  const boxes = Array.from(
+    { length: 24 },
+    () => course3d.add(new THREE.Mesh(boxGeometry, boxMaterial)).children.at(-1)!,
+  );
 
   // Smashing through an item box: rainbow shards and a flash, streaming past the camera.
   const SHARDS = 120;
@@ -578,7 +645,9 @@ export async function createRainbowRoad(host: HTMLCanvasElement): Promise<SceneE
         .addScaledVector(burst, 6 + Math.random() * 6)
         .addScaledVector(frame.up, 3);
       shard.gravity.copy(frame.up).multiplyScalar(-14);
-      shard.spin.set(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).multiplyScalar(18);
+      shard.spin
+        .set(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5)
+        .multiplyScalar(18);
       shard.age = 0;
       shard.life = 0.9 + Math.random() * 0.6;
     }
@@ -600,7 +669,11 @@ export async function createRainbowRoad(host: HTMLCanvasElement): Promise<SceneE
       if (shard.age >= shard.life) return shardMesh.setMatrixAt(i, hidden);
       shard.velocity.addScaledVector(shard.gravity, dt);
       shard.position.addScaledVector(shard.velocity, dt);
-      shardRotation.set(shard.spin.x * shard.age, shard.spin.y * shard.age, shard.spin.z * shard.age);
+      shardRotation.set(
+        shard.spin.x * shard.age,
+        shard.spin.y * shard.age,
+        shard.spin.z * shard.age,
+      );
       shardScale.setScalar(1 - Math.pow(shard.age / shard.life, 2));
       matrix.compose(shard.position, shardQuaternion.setFromEuler(shardRotation), shardScale);
       shardMesh.setMatrixAt(i, matrix);
@@ -630,7 +703,10 @@ export async function createRainbowRoad(host: HTMLCanvasElement): Promise<SceneE
       if (ahead < 1) {
         broken.add(row);
         courseFrame(course, row, scratch);
-        boxLocal.copy(scratch.point).addScaledVector(scratch.right, offset).addScaledVector(scratch.up, 1.9);
+        boxLocal
+          .copy(scratch.point)
+          .addScaledVector(scratch.right, offset)
+          .addScaledVector(scratch.up, 1.9);
         smash(boxLocal, scratch, speed);
         race.smashed(time);
       } else if (!aimTarget) {
@@ -649,6 +725,13 @@ export async function createRainbowRoad(host: HTMLCanvasElement): Promise<SceneE
     race.reset();
     course = buildCourse(source.song, speedScale);
     courseKey = `${source.key}:${speedScale}`;
+    // Music can arrive before the first draw. There is no previous world frame
+    // to preserve then: `here` still has zero basis vectors, which would collapse
+    // the entire course (and its racers) into a singular placement matrix.
+    if (!placed) {
+      placement.identity();
+      return;
+    }
     const local = courseFrame(course, source.time * COURSE_RATE, scratch);
     from.makeBasis(local.right, local.up, local.tangent).setPosition(local.point).invert();
     to.makeBasis(here.right, here.up, here.tangent).setPosition(here.point);
@@ -658,7 +741,10 @@ export async function createRainbowRoad(host: HTMLCanvasElement): Promise<SceneE
   /** Pose a decoration on the course, facing back down the road towards the kart. */
   const orient = (object: THREE.Object3D, index: number, offset: number, lift: number) => {
     courseFrame(course, index, scratch);
-    object.position.copy(scratch.point).addScaledVector(scratch.right, offset).addScaledVector(scratch.up, lift);
+    object.position
+      .copy(scratch.point)
+      .addScaledVector(scratch.right, offset)
+      .addScaledVector(scratch.up, lift);
     matrix.makeBasis(scratch.right, scratch.up, back.copy(scratch.tangent).negate());
     object.quaternion.setFromRotationMatrix(matrix);
   };
@@ -676,7 +762,10 @@ export async function createRainbowRoad(host: HTMLCanvasElement): Promise<SceneE
       for (let j = 0; j <= COLUMNS; j++) {
         const x = j / COLUMNS;
         const k = r * (COLUMNS + 1) + j;
-        tmp.copy(scratch.point).addScaledVector(scratch.right, (x - 0.5) * WIDTH).toArray(roadPosition, k * 3);
+        tmp
+          .copy(scratch.point)
+          .addScaledVector(scratch.right, (x - 0.5) * WIDTH)
+          .toArray(roadPosition, k * 3);
         tmp
           .copy(scratch.point)
           .addScaledVector(scratch.right, (x - 0.5) * WIDTH * 1.6)
@@ -701,7 +790,11 @@ export async function createRainbowRoad(host: HTMLCanvasElement): Promise<SceneE
         }
       }
     }
-    for (const geometry of [roadGeometry, underglowGeometry, ...rails.map((rail) => rail.geometry)]) {
+    for (const geometry of [
+      roadGeometry,
+      underglowGeometry,
+      ...rails.map((rail) => rail.geometry),
+    ]) {
       geometry.attributes.position!.needsUpdate = true;
       geometry.attributes.uv!.needsUpdate = true;
     }
@@ -732,13 +825,15 @@ export async function createRainbowRoad(host: HTMLCanvasElement): Promise<SceneE
     for (const index of course.items) {
       if (index < first || index >= last || hash(index) > 0.3 + look.density * 0.7) continue;
       for (let k = 0; k < 4 && used < boxes.length; k++)
-        if (!(k === hitLane(index) && broken.has(index))) orient(boxes[used++]!, index, laneOffset(k), 1.9);
+        if (!(k === hitLane(index) && broken.has(index)))
+          orient(boxes[used++]!, index, laneOffset(k), 1.9);
     }
     boxes.forEach((box, i) => (box.visible = i < used));
 
     used = 0;
     for (const index of course.dashes)
-      if (index >= first && index < last && used < dashes.length) orient(dashes[used++]!, index, 0, 0.06);
+      if (index >= first && index < last && used < dashes.length)
+        orient(dashes[used++]!, index, 0, 0.06);
     dashes.forEach((dash, i) => (dash.visible = i < used));
 
     used = 0;
@@ -756,9 +851,11 @@ export async function createRainbowRoad(host: HTMLCanvasElement): Promise<SceneE
     for (let g = firstAt(BOO_EVERY); g < last && used < boos.length; g += BOO_EVERY) {
       const boo = boos[used++]!;
       const side = hash(g + 5) > 0.5 ? 1 : -1;
+      const danceAmount = reduced.matches ? 0 : Math.max(0, look.motion);
       orient(boo, g, side * (WIDTH / 2 + 4 + hash(g + 6) * 8), 3 + hash(g + 7) * 5);
-      boo.rotateY(-side * 0.5);
-      boo.position.addScaledVector(scratch.up, Math.sin((previous ?? 0) * 1.3 + g) * 0.6);
+      boo.rotateY(-side * 0.5 + dance.twist * danceAmount * 0.25);
+      boo.rotateZ(side * dance.sway * danceAmount * 0.16);
+      boo.position.addScaledVector(scratch.up, dance.bounce * danceAmount * 0.75);
       boo.visible = spook > 0.01;
     }
     boos.forEach((boo, i) => i >= used && (boo.visible = false));
@@ -777,6 +874,9 @@ export async function createRainbowRoad(host: HTMLCanvasElement): Promise<SceneE
   let shimmerPhase = 0;
 
   return {
+    setDance(next) {
+      dance = next;
+    },
     setLook(next) {
       target = next;
     },
@@ -826,21 +926,37 @@ export async function createRainbowRoad(host: HTMLCanvasElement): Promise<SceneE
       const head = Math.min(course.count - 1, Math.floor(index));
       const headDistance = course.distance[head]!;
       let lookIndex = head;
-      while (lookIndex < course.count - 1 && course.distance[lookIndex]! - headDistance < 24) lookIndex++;
+      while (lookIndex < course.count - 1 && course.distance[lookIndex]! - headDistance < 24)
+        lookIndex++;
       // Interpolate between samples so the gaze glides instead of stepping.
       const before = course.distance[Math.max(0, lookIndex - 1)]!,
         after = course.distance[lookIndex]!;
-      const goal = course.distance[head]! + (index - head) * (course.distance[Math.min(course.count - 1, head + 1)]! - course.distance[head]!) + 24;
-      frameWorld(lookIndex - 1 + THREE.MathUtils.clamp((goal - before) / Math.max(1e-3, after - before), 0, 1), ahead);
+      const goal =
+        course.distance[head]! +
+        (index - head) *
+          (course.distance[Math.min(course.count - 1, head + 1)]! - course.distance[head]!) +
+        24;
+      frameWorld(
+        lookIndex -
+          1 +
+          THREE.MathUtils.clamp((goal - before) / Math.max(1e-3, after - before), 0, 1),
+        ahead,
+      );
 
       const style = sectionAt(source.song, source.time)?.style ?? "vocal";
-      const speed = (course.distance[Math.min(course.count - 1, head + 1)]! - headDistance) * COURSE_RATE;
+      const speed =
+        (course.distance[Math.min(course.count - 1, head + 1)]! - headDistance) * COURSE_RATE;
       const kartDistance =
-        headDistance + (index - head) * (course.distance[Math.min(course.count - 1, head + 1)]! - headDistance) + KART_LEAD;
+        headDistance +
+        (index - head) * (course.distance[Math.min(course.count - 1, head + 1)]! - headDistance) +
+        KART_LEAD;
       driveThroughBoxes(kartDistance, speed, dt, time);
       // A chase camera just behind the kart; breakdowns lift it away, like floating.
       lift += ((style === "break" ? 4.2 : 2.8) - lift) * (1 - Math.exp(-dt * 2));
-      eye.copy(here.point).addScaledVector(here.up, lift).addScaledVector(here.right, steer * 0.7);
+      eye
+        .copy(here.point)
+        .addScaledVector(here.up, lift)
+        .addScaledVector(here.right, steer * 0.7);
       camera.position.copy(eye);
       if (!placed) {
         camera.up.copy(here.up);
@@ -848,7 +964,12 @@ export async function createRainbowRoad(host: HTMLCanvasElement): Promise<SceneE
       }
       // Following the road's up vector makes swirls and banking roll the whole screen.
       camera.up.lerp(here.up, 1 - Math.exp(-dt * 5)).normalize();
-      camera.lookAt(focus.copy(ahead.point).addScaledVector(ahead.up, 1.2).addScaledVector(ahead.right, steer * 0.6));
+      camera.lookAt(
+        focus
+          .copy(ahead.point)
+          .addScaledVector(ahead.up, 1.2)
+          .addScaledVector(ahead.right, steer * 0.6),
+      );
       // Boosts and star power widen the view, as if the world rushes past.
       const fov = 64 + race.state.boost * 16 + race.state.star * 5;
       if (Math.abs(camera.fov - fov) > 0.01) {
@@ -857,10 +978,21 @@ export async function createRainbowRoad(host: HTMLCanvasElement): Promise<SceneE
       }
       backdrop.position.copy(camera.position);
       layRoad(head - BEHIND);
-      race.update({ course, songTime: source.time, time, dt, distance: kartDistance, steer, density: look.density });
+      race.update({
+        course,
+        songTime: source.time,
+        time,
+        dt,
+        distance: kartDistance,
+        steer,
+        density: look.density,
+        dance,
+        danceAmount: reduced.matches ? 0 : Math.max(0, look.motion),
+      });
 
       const energy = Math.min(1, energyAt(source.song, source.time));
-      const glow = (0.75 + look.intensity * 0.25) * (style === "drop" ? 1.12 : style === "break" ? 0.85 : 1);
+      const glow =
+        (0.75 + look.intensity * 0.25) * (style === "drop" ? 1.12 : style === "break" ? 0.85 : 1);
       const span = course.distance[Math.min(course.count - 1, head + AHEAD - 1)]! - headDistance;
       shimmerPhase += dt * (2 + energy * 3);
       roadMaterial.uniforms.time!.value = shimmerPhase;

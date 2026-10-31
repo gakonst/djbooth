@@ -3,7 +3,7 @@ import {
   type VisualLook,
   type VisualTheme,
 } from "../../dj-monitor/src/visual-presets.js";
-import type { SceneId } from "./scenes.js";
+import { SCENES, type SceneId } from "./scenes.js";
 
 export type Intro = "fade" | "flicker" | "cut";
 export const INTROS: Intro[] = ["fade", "flicker", "cut"];
@@ -56,43 +56,40 @@ const starter = (
   updatedAt: 0,
 });
 
-/** Every existing booth scene, plus the saved looks from the workbench's visual show. */
+/** The ten Halloween favorites. Retired renderers are no longer part of the show. */
 export function starterShow(): Show {
   return {
     version: 1,
-    liveId: "haunted-booth",
+    liveId: "jungle-hero",
     designs: [
+      starter("ritual-cathedral", "Ritual Cathedral", "ritual-cathedral"),
       starter("haunted-booth", "Haunted Booth", "halloween"),
       starter("corn-maze", "Corn Maze", "corn-maze"),
-      starter("neon-midnight", "Neon Midnight", "halloween", {
-        theme: "eighties",
-        intensity: 0.75,
-        motion: 0.65,
-        density: 0.7,
-        halloween: 0.35,
-      }),
-      starter("y2k-pop", "Y2K Pop", "halloween", { theme: "y2k", density: 0.9, halloween: 0.45 }),
-      starter("after-dark", "After Dark", "halloween", {
-        theme: "tech-house",
-        intensity: 1.25,
-        motion: 1.15,
-        halloween: 0.6,
-      }),
+      starter("rainbow-road", "Spectral Highway", "rainbow-road"),
+      starter("pac-man", "Pumpkin Pursuit", "pac-man"),
       starter("space-race", "Space Race", "race", {
-        theme: "eighties",
+        theme: "halloween",
         intensity: 0.9,
         density: 0.8,
       }),
       starter("temple-run", "Temple Run", "temple-run"),
       starter("jungle-hero", "Jungle Hero", "jungle-hero"),
       starter("skeleton-disco", "Skeleton Disco", "skeleton-disco"),
-      starter("prism-glass", "Prism Glass", "vgpu"),
-      starter("folded-surface", "Folded Surface", "webgpu"),
-      starter("ribbons", "Ribbons", "ribbons"),
-      starter("architecture", "Architecture", "architecture"),
-      starter("line-waves", "Line Waves", "lines"),
       starter("dither-knot", "Dither Knot", "dither"),
     ],
+  };
+}
+
+/** Old saved designs must not resurrect retired scenes through the fallback renderer. */
+export function reconcileShow(show: Show): Show {
+  const designs = show.designs.filter((design) =>
+    SCENES.some((scene) => scene.id === design.scene),
+  );
+  if (!designs.length) return starterShow();
+  return {
+    ...show,
+    designs,
+    liveId: designs.some((design) => design.id === show.liveId) ? show.liveId : designs[0]!.id,
   };
 }
 
@@ -112,14 +109,14 @@ export async function loadShow(): Promise<Show> {
   const response = await fetch("/party/show");
   if (response.status === 404) return starterShow();
   if (!response.ok) throw new Error(`Could not load show (${response.status})`);
-  return (await response.json()) as Show;
+  return reconcileShow((await response.json()) as Show);
 }
 
 export async function saveShow(show: Show) {
   const response = await fetch("/party/show", {
     method: "PUT",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(show),
+    body: JSON.stringify(reconcileShow(show)),
   });
   if (!response.ok) throw new Error(`Save failed (${response.status})`);
 }

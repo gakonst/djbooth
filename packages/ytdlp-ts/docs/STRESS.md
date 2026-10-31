@@ -1,7 +1,6 @@
 # Music stress and recovery validation
 
-Validated on 2026-07-10 in Pacific Time. Live-site results are evidence for that run; deterministic
-tests guard the behavior in CI without depending on third-party availability.
+Validated on 2026-07-10 in Pacific Time. Live-site results are evidence for that run.
 
 ## Native YouTube direct-audio validation — 2026-07-12 Pacific Time
 
@@ -24,8 +23,6 @@ tests guard the behavior in CI without depending on third-party availability.
 - No `ReferenceClient`, external `yt-dlp`, remote player evaluation, or SABR path ran.
 - Each track now uses up to two concurrent 1 MiB HTTP ranges. Completed chunks commit in order so
   every `.part` file remained a contiguous resumable prefix.
-- Tests cover exact-offset resume, concurrent out-of-order range completion, `Content-Range`
-  validation, transient URL sidecar redaction, and error redaction.
 
 ## Five-track mixed-service batch
 
@@ -42,9 +39,6 @@ tests guard the behavior in CI without depending on third-party availability.
 The live progressive SoundCloud test aborted after 326,450 bytes. The next invocation issued a Range
 request, reported its first progress event at 358,347 bytes, and completed the 2,881,409-byte file.
 FFprobe validated it as a 180.062-second MP3.
-
-The deterministic test server also severs its first 512 KiB transfer. The downloader retries inside
-the same invocation, sends `Range: bytes=<part-size>-`, and verifies the final bytes exactly.
 
 ## YouTube transfer policy
 

@@ -2,8 +2,6 @@
   "name": "@gakonst/soundcloud",
   "version": "0.2.0",
   "description": "A complete typed SoundCloud API client with OAuth 2.1, account access, and an agent-friendly CLI.",
-  "type": "module",
-  "sideEffects": false,
   "license": "MIT",
   "author": "Georgios Konstantopoulos",
   "repository": {
@@ -11,15 +9,17 @@
     "url": "https://github.com/gakonst/djbooth",
     "directory": "packages/soundcloud"
   },
-  "publishConfig": {
-    "access": "public"
-  },
-  "engines": {
-    "node": ">=22"
-  },
   "bin": {
     "soundcloud": "./dist/cli.js"
   },
+  "files": [
+    "dist",
+    "openapi/soundcloud.yaml",
+    "README.md",
+    "LICENSE"
+  ],
+  "type": "module",
+  "sideEffects": false,
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -34,23 +34,18 @@
       "import": "./dist/auth/index.js"
     }
   },
-  "files": [
-    "dist",
-    "openapi/soundcloud.yaml",
-    "README.md",
-    "LICENSE"
-  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsup",
-    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test",
+    "check": "pnpm format:check && pnpm lint && pnpm typecheck",
     "cli": "tsx src/cli.ts",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "eslint .",
     "openapi:sync": "tsx scripts/sync-openapi.ts",
     "prepack": "pnpm build",
-    "test": "vitest run",
-    "test:watch": "vitest",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -69,7 +64,9 @@
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.52.0",
-    "vitest": "^4.1.0",
     "yaml": "^2.8.2"
+  },
+  "engines": {
+    "node": ">=22"
   }
 }

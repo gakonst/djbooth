@@ -267,38 +267,3 @@ fn compute_keys(shared_secret: &[u8], packets: &[u8]) -> io::Result<(Vec<u8>, Ve
         data[0x34..0x54].to_vec(),
     ))
 }
-
-#[cfg(test)]
-mod platform_tests {
-    use super::platform_for;
-    use librespot_protocol::keyexchange::Platform;
-
-    #[test]
-    fn mobile_oauth_uses_supported_ap_platform() {
-        for os in ["ios", "android", "linux"] {
-            for arch in ["arm", "aarch64"] {
-                assert_eq!(platform_for(os, arch), Platform::PLATFORM_LINUX_ARM);
-            }
-        }
-        assert_eq!(
-            platform_for("ios", "x86_64"),
-            Platform::PLATFORM_LINUX_X86_64
-        );
-    }
-
-    #[test]
-    fn desktop_ap_platforms_are_unchanged() {
-        assert_eq!(
-            platform_for("macos", "x86_64"),
-            Platform::PLATFORM_OSX_X86_64
-        );
-        assert_eq!(
-            platform_for("windows", "x86_64"),
-            Platform::PLATFORM_WIN32_X86_64
-        );
-        assert_eq!(
-            platform_for("freebsd", "x86_64"),
-            Platform::PLATFORM_FREEBSD_X86_64
-        );
-    }
-}

@@ -1,8 +1,7 @@
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { readFile, stat } from "node:fs/promises";
+import { open, readFile, stat } from "node:fs/promises";
 import { extname } from "node:path";
-import { Readable } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
 
@@ -15,6 +14,7 @@ import {
 import { Cli, z } from "incur";
 
 import { loginCloud, savedCloudToken, forgetCloudLogin } from "./cloud-login.js";
+import { publishUsbExport } from "./cloud-usb.js";
 
 const publisherPrefix = "rekordbox-publish:";
 const changeSchema = z.object({
@@ -40,7 +40,12 @@ type CloudTrack = Pick<
 type CloudWaveform = Omit<TrackWaveform, "beatGrid"> & {
   beatGrid?: { times: number[]; beats: number[] };
 };
-type Collection = { id: string; name: string; trackIDs: string[] };
+type Collection = {
+  id: string;
+  name: string;
+  trackIDs: string[];
+  folders?: { id: string; name: string }[];
+};
 type Library = Pick<RekordboxLibraryService, "getTracks" | "getPlaylists" | "getAudioPath"> &
   Partial<Pick<RekordboxLibraryService, "getWaveform" | "getAnalysisPaths">>;
 type Progress = { phase: string; current: number; total: number };
@@ -48,11 +53,14 @@ export type CloudPublishOptions = {
   endpoint?: string;
   token?: string;
   playlist?: string[];
+  deletePlaylist?: string[];
   namespace?: string;
   metadataOnly?: boolean;
   artifactsOnly?: boolean;
   uploadConcurrency?: number;
   dryRun?: boolean;
+  usbExport?: boolean;
+  usbDatabasePath?: string;
   onProgress?: (progress: Progress) => void;
 };
 
@@ -219,6 +227,10 @@ export async function publishCloudLibrary(
 ) {
   if (options.metadataOnly && options.artifactsOnly)
     throw new TypeError("Choose metadata-only or artifacts-only publishing");
+  if (options.usbExport && (options.metadataOnly || options.artifactsOnly))
+    throw new TypeError("USB exports require full cloud publishing");
+  if (options.usbExport && !options.playlist?.length)
+    throw new TypeError("Select playlists or a folder with --playlist for USB exports");
   if (options.namespace && !/^cloud:[a-f0-9-]{36}$/i.test(options.namespace))
     throw new TypeError("Invalid cloud playlist namespace");
   const trackID = (id: string) => (options.namespace ? `${options.namespace}:track:${id}` : id);
@@ -245,13 +257,31 @@ export async function publishCloudLibrary(
   );
   heartbeat.unref();
   try {
-    const playlists = selectPlaylists(library.getPlaylists(), options.playlist ?? []);
+    const allPlaylists = library.getPlaylists();
+    const playlists = selectPlaylists(allPlaylists, options.playlist ?? []);
+    const playlistById = new Map(allPlaylists.map((playlist) => [playlist.id, playlist]));
     const collections: Collection[] = playlists.map((playlist) => ({
       id: options.namespace
         ? `${options.namespace}:playlist:${playlist.id}`
         : `rekordbox:${playlist.id}`,
       name: playlist.name,
       trackIDs: allTracks(library, playlist.id).map((track) => track.id),
+      folders: (() => {
+        const folders: { id: string; name: string }[] = [];
+        const visited = new Set([playlist.id]);
+        let parent = playlistById.get(playlist.parentId);
+        while (parent && !visited.has(parent.id)) {
+          visited.add(parent.id);
+          folders.unshift({
+            id: options.namespace
+              ? `${options.namespace}:folder:${parent.id}`
+              : `rekordbox-folder:${parent.id}`,
+            name: parent.name,
+          });
+          parent = playlistById.get(parent.parentId);
+        }
+        return folders;
+      })(),
     }));
     const selectedIDs = new Set(collections.flatMap((collection) => collection.trackIDs));
     const libraryTracks = allTracks(library);
@@ -279,6 +309,7 @@ export async function publishCloudLibrary(
       cdjReady: 0,
       conflicts: [] as string[],
       failures: [] as { id: string; title: string; message: string }[],
+      deletedPlaylists: [] as string[],
     };
     if (options.dryRun) {
       emit("complete", tracks.length, tracks.length);
@@ -325,7 +356,9 @@ export async function publishCloudLibrary(
     emit("reconcile", 0, 1);
     while (true) {
       const scope = options.namespace ? `&namespace=${encodeURIComponent(options.namespace)}` : "";
-      const response = await checked(await call(`/v1/sync/changes?after=${cursor}${scope}`));
+      const response = await checked(
+        await call(`/v1/sync/changes?after=${cursor}&latest=1${scope}`),
+      );
       const page = z
         .object({
           changes: z.array(changeSchema),
@@ -379,6 +412,37 @@ export async function publishCloudLibrary(
       result.published++;
       return true;
     }
+    // Explicit removals affect cloud playlist rows only, never recordings or local data.
+    for (const id of options.deletePlaylist ?? []) {
+      if (library.getPlaylists().some((playlist) => playlist.id === id))
+        throw new Error(
+          `Playlist ${id} still exists locally; remove it locally before cloud deletion`,
+        );
+      const entityID = options.namespace
+        ? `${options.namespace}:playlist:${id}`
+        : `rekordbox:${id}`;
+      const previous = remote.get(entityKey("collection", entityID));
+      if (!previous || previous.deleted) continue;
+      const response = await call("/v1/sync/changes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          operationID: `${publisherPrefix}delete:${id}:${previous.sequence}`,
+          kind: "collection",
+          entityID,
+          baseVersion: previous.sequence,
+          payload: null,
+          deleted: true,
+        }),
+      });
+      if (response.status === 409) {
+        await response.body?.cancel();
+        result.conflicts.push(entityKey("collection", entityID));
+      } else {
+        await checked(response);
+        result.deletedPlaylists.push(entityID);
+      }
+    }
     // Metadata arrives first so a phone can browse while recordings are still uploading.
     const accepted = new Set<string>();
     const waveforms = new Map<string, ReturnType<typeof cloudWaveform>>();
@@ -428,27 +492,41 @@ export async function publishCloudLibrary(
           const head = await call(`/v1/media/${digest}`, { method: "HEAD" });
           if (head.status === 404) {
             async function upload(hash: string, start: number, size: number): Promise<void> {
+              // Each request is bounded to 16 MiB. A replayable buffer also avoids
+              // Node's stream adapter cancellation race when a server rejects a PUT.
+              const file = await open(path, "r");
+              const buffer = Buffer.alloc(size);
+              try {
+                let offset = 0;
+                while (offset < size) {
+                  const part = await file.read(buffer, offset, size - offset, start + offset);
+                  if (!part.bytesRead)
+                    throw new Error("Audio changed during upload; rerun publishing");
+                  offset += part.bytesRead;
+                }
+              } finally {
+                await file.close();
+              }
               for (let attempt = 0; ; attempt++) {
-                // A consumed streaming body cannot be replayed; reopen the same
-                // content-addressed range for each bounded retry.
-                const stream = createReadStream(path, { start, end: start + size - 1 });
                 try {
-                  const init = {
-                    method: "PUT",
-                    headers: {
-                      "Content-Type": "application/octet-stream",
-                      "Content-Length": String(size),
-                    },
-                    body: Readable.toWeb(stream) as ReadableStream<Uint8Array>,
-                    duplex: "half",
-                  };
-                  const uploaded = await checked(await call(`/v1/media/${hash}`, init, 600_000));
+                  const uploaded = await checked(
+                    await call(
+                      `/v1/media/${hash}`,
+                      {
+                        method: "PUT",
+                        headers: {
+                          "Content-Type": "application/octet-stream",
+                          "Content-Length": String(size),
+                        },
+                        body: buffer,
+                      },
+                      600_000,
+                    ),
+                  );
                   await uploaded.body?.cancel();
                   return;
                 } catch (error) {
                   if (attempt >= 2) throw error;
-                } finally {
-                  stream.destroy();
                 }
                 await delay(250 * 2 ** attempt);
               }
@@ -558,12 +636,29 @@ export async function publishCloudLibrary(
         ),
       );
     }
+    const usbExports = [];
+    if (options.usbExport) {
+      if (result.failures.length || result.conflicts.length)
+        throw new Error("Resolve publishing failures/conflicts before creating USB exports");
+      for (const [index, collection] of collections.entries()) {
+        usbExports.push(
+          await publishUsbExport({
+            playlistId: playlists[index]!.id,
+            collectionId: collection.id,
+            trackIDs: collection.trackIDs.map(trackID),
+            ...(options.usbDatabasePath ? { databasePath: options.usbDatabasePath } : {}),
+            call,
+            progress: emit,
+          }),
+        );
+      }
+    }
     emit(
       result.failures.length || result.conflicts.length ? "needs-attention" : "complete",
       tracks.length,
       tracks.length,
     );
-    return result;
+    return options.usbExport ? { ...result, usbExports } : result;
   } finally {
     clearInterval(heartbeat);
   }
@@ -587,6 +682,10 @@ export const cloudCli = Cli.create("cloud", {
       .array(z.string())
       .optional()
       .describe("Playlist/folder ID, exact name, or hierarchy path; repeat to select more"),
+    deletePlaylist: z
+      .array(z.string().regex(/^\d+$/))
+      .optional()
+      .describe("Explicit locally deleted playlist ID to tombstone in cloud only; repeat for more"),
     namespace: z
       .string()
       .optional()
@@ -597,6 +696,12 @@ export const cloudCli = Cli.create("cloud", {
       .boolean()
       .default(false)
       .describe("Publish catalog now without uploading audio"),
+    usbExport: z
+      .boolean()
+      .default(false)
+      .describe(
+        "Publish genuine downloadable Device Library + OneLibrary USB ZIPs for selected playlists (requires zip)",
+      ),
     artifactsOnly: z
       .boolean()
       .default(false)
@@ -636,11 +741,14 @@ export const cloudCli = Cli.create("cloud", {
         ...(endpoint ? { endpoint } : {}),
         ...(token ? { token } : {}),
         ...(c.options.playlist ? { playlist: c.options.playlist } : {}),
+        ...(c.options.deletePlaylist ? { deletePlaylist: c.options.deletePlaylist } : {}),
         ...(c.options.namespace ? { namespace: c.options.namespace } : {}),
         metadataOnly: c.options.metadataOnly,
         artifactsOnly: c.options.artifactsOnly,
         uploadConcurrency: c.options.uploadConcurrency,
         dryRun: c.options.dryRun,
+        usbExport: c.options.usbExport,
+        ...(c.options.dbPath ? { usbDatabasePath: c.options.dbPath } : {}),
         ...(c.options.progress === "always" ||
         (c.options.progress === "auto" && process.stderr.isTTY)
           ? {

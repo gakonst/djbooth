@@ -193,12 +193,6 @@ fn track_search_score(document: &SearchDocument, query: &str, query_terms: &[&st
     None
 }
 
-#[cfg(test)]
-pub(crate) fn search_entries(library: &LibrarySnapshot, args: &[DbValue]) -> Vec<MenuEntry> {
-    let index = SearchIndex::new(library);
-    search_entries_indexed(library, &index, args)
-}
-
 pub(crate) fn search_entries_indexed(
     library: &LibrarySnapshot,
     index: &SearchIndex,

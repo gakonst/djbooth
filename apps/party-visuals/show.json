@@ -1,36 +1,21 @@
 {
   "version": 1,
-  "liveId": "haunted-booth",
+  "liveId": "dither-knot",
   "designs": [
     {
       "id": "haunted-booth",
       "name": "Haunted Booth",
-      "scene": "rainbow-road",
+      "scene": "pac-man",
       "look": {
         "theme": "y2k",
-        "intensity": 0.15,
-        "motion": 1.2,
+        "intensity": 2,
+        "motion": 2,
         "density": 0.65,
         "halloween": 1
       },
-      "intro": "fade",
-      "updatedAt": 1793156212653,
-      "thumbAt": 1793156216200
-    },
-    {
-      "name": "Architecture",
-      "scene": "infinite-vinyl",
-      "look": {
-        "theme": "y2k",
-        "intensity": 0.15,
-        "motion": 1.2,
-        "density": 0.65,
-        "halloween": 1
-      },
-      "intro": "fade",
-      "id": "architecture-2",
-      "updatedAt": 1793153951289,
-      "thumbAt": 1793153954821
+      "intro": "flicker",
+      "updatedAt": 1793472103520,
+      "thumbAt": 1793472099179
     },
     {
       "id": "corn-maze",
@@ -123,78 +108,19 @@
       "thumbAt": 1793072562550
     },
     {
-      "id": "prism-glass",
-      "name": "Prism Glass",
-      "scene": "vgpu",
-      "look": {
-        "theme": "halloween",
-        "intensity": 1,
-        "motion": 1,
-        "density": 1,
-        "halloween": 1
-      },
-      "intro": "fade",
-      "updatedAt": 0,
-      "thumbAt": 1793072597562
-    },
-    {
       "id": "folded-surface",
       "name": "Folded Surface",
-      "scene": "webgpu",
+      "scene": "dither",
       "look": {
         "theme": "halloween",
-        "intensity": 1,
-        "motion": 1,
+        "intensity": 2,
+        "motion": 2,
         "density": 1,
         "halloween": 1
       },
-      "intro": "fade",
-      "updatedAt": 0
-    },
-    {
-      "id": "ribbons",
-      "name": "Ribbons",
-      "scene": "ribbons",
-      "look": {
-        "theme": "halloween",
-        "intensity": 1,
-        "motion": 1,
-        "density": 1,
-        "halloween": 1
-      },
-      "intro": "fade",
-      "updatedAt": 0,
-      "thumbAt": 1793072660807
-    },
-    {
-      "id": "architecture",
-      "name": "Architecture",
-      "scene": "architecture",
-      "look": {
-        "theme": "halloween",
-        "intensity": 1,
-        "motion": 1,
-        "density": 1,
-        "halloween": 1
-      },
-      "intro": "fade",
-      "updatedAt": 0,
-      "thumbAt": 1793072665810
-    },
-    {
-      "id": "line-waves",
-      "name": "Line Waves",
-      "scene": "lines",
-      "look": {
-        "theme": "halloween",
-        "intensity": 1,
-        "motion": 1,
-        "density": 1,
-        "halloween": 1
-      },
-      "intro": "fade",
-      "updatedAt": 0,
-      "thumbAt": 1793081283001
+      "intro": "flicker",
+      "updatedAt": 1793475263456,
+      "thumbAt": 1793475275884
     },
     {
       "id": "dither-knot",

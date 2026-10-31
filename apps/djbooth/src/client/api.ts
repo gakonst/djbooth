@@ -1,3 +1,4 @@
+import { cloudLibraryRequest, isCloudWorkstation } from "./cloud-library.js";
 import type {
   ApiError,
   HostedMutationReceipt,
@@ -116,6 +117,14 @@ export async function getTrackWaveform(id: string, signal?: AbortSignal): Promis
 }
 
 export function subscribeLibraryEvents(onEvent: (event: LibraryEvent) => void): () => void {
+  if (isCloudWorkstation()) {
+    const timer = setInterval(
+      () =>
+        onEvent({ id: Date.now(), type: "external-change", emittedAt: new Date().toISOString() }),
+      60_000,
+    );
+    return () => clearInterval(timer);
+  }
   const source = new EventSource("/api/events");
   source.addEventListener("library", (message) => {
     try {
@@ -206,6 +215,7 @@ export async function startProcessingJob(
 }
 
 async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
+  if (isCloudWorkstation()) return cloudLibraryRequest<T>(path, init);
   const response = await fetch(path, {
     credentials: "same-origin",
     ...init,

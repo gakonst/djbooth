@@ -22,5 +22,5 @@
     "useUnknownInCatchVariables": true,
     "verbatimModuleSyntax": true
   },
-  "include": ["src", "test"]
+  "include": ["src"]
 }

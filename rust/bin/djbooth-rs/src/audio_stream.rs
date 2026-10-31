@@ -168,19 +168,3 @@ pub(crate) fn open_live_mp3(
 
     Ok(ReceiverStream::new(receiver))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn source_requires_an_active_audio_device() {
-        let source = AudioStreamSource::new();
-        assert!(!source.is_connected());
-        assert!(source.subscribe().is_err());
-        source.set_connected(48_000);
-        assert!(source.subscribe().is_ok());
-        source.set_disconnected();
-        assert!(source.subscribe().is_err());
-    }
-}

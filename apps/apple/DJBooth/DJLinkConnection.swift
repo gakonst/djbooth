@@ -479,57 +479,6 @@ private actor DJLinkEngine {
         UIApplication.shared.applicationState != .background || backgroundTask != .invalid || hasBackgroundAudio
     }
 
-    #if DEBUG && targetEnvironment(simulator)
-    /// Explicit UI-test fixture only; it never starts or advertises a Rust server.
-    func installPreviewDecks() throws {
-        func deck(_ player: Int, playing: Bool) throws -> DJLinkDeckState {
-            let row: [String: Any] = ["player": player, "active": true, "source_player": 17,
-                "source_slot": 4, "track_type": 1, "track_id": player, "playing": playing,
-                "play_state": playing ? "playing" : "paused", "synced": false,
-                "tempo_master": playing, "bpm_hundreds": 12800, "effective_bpm_hundreds": 12800,
-                "pitch_centi_percent": 0, "beat_in_bar": 1, "playhead_ms": 45000,
-                "track_length_sec": 240, "track_progress_milli": 188,
-                "master_tempo": true, "key_shift_cents": player == 2 ? 200 : 0,
-                "effective_key": player == 2 ? "D" : "C"]
-            return try JSONDecoder().decode(DJLinkDeckState.self, from: JSONSerialization.data(withJSONObject: row))
-        }
-        decks = [DJLinkDeck(state: try deck(1, playing: false), model: "CDJ-3000", libraryTrackID: "demo-5"),
-                 DJLinkDeck(state: try deck(2, playing: true), model: "CDJ-3000", libraryTrackID: "demo-7")]
-        if ProcessInfo.processInfo.arguments.contains("--ui-test-six-decks") {
-            for player in 3...6 {
-                decks.append(DJLinkDeck(state: try deck(player, playing: false), model: "CDJ-3000", libraryTrackID: "demo-5"))
-            }
-            let channels: [[String: Int]] = (1...4).map { channel in
-                ["channel": channel, "input_source": 1, "trim": 128, "eq_high": channel == 1 ? 255 : 128,
-                 "eq_mid": 128, "eq_low": channel == 1 ? 0 : 128, "color": 128,
-                 "fader": 255, "crossfader_assign": 1]
-            }
-            let event = try JSONDecoder().decode(DJLinkMixerEvent.self, from: JSONSerialization.data(withJSONObject:
-                ["source_ip": "192.0.2.33", "mixer": ["channels": channels, "crossfader": 128]]))
-            mixers[event.source_ip] = DJLinkMixerObservation(event: event, receivedAt: ProcessInfo.processInfo.systemUptime)
-        }
-        if !ProcessInfo.processInfo.arguments.contains("--ui-test-missing-deck-waveform") {
-            for index in decks.indices {
-                decks[index].waveform = Waveform(peaks: [0.25, 0.75, 1, 0.5],
-                    colors: [[255, 0, 0], [0, 255, 0], [0, 128, 255], [255, 128, 0]],
-                    source: "rekordbox", durationSeconds: 240)
-            }
-        }
-        status = DJLinkStatus(running: true, trackCount: decks.count, devices: decks.map {
-            DJLinkStatus.Device(player: $0.id, ip: "192.0.2.\($0.id)", model: $0.model)
-        })
-        if ProcessInfo.processInfo.arguments.contains("--ui-test-omnis") {
-            decks = [DJLinkDeck(state: try deck(11, playing: false), model: "OMNIS-DUO", libraryTrackID: "demo-5", waveform: decks.first?.waveform),
-                     DJLinkDeck(state: try deck(12, playing: true), model: "OMNIS-DUO", libraryTrackID: "demo-7", waveform: decks.last?.waveform)]
-            status = DJLinkStatus(running: true, trackCount: 2, devices: [
-                DJLinkStatus.Device(player: 11, ip: "192.0.2.11", model: "OMNIS-DUO")
-            ])
-        }
-        if ProcessInfo.processInfo.arguments.contains("--ui-test-missing-deck-status") {
-            decks.removeLast()
-        }
-    }
-    #endif
 
     func sceneChanged(background: Bool, audioPlaying: Bool) {
         backgroundAudio = audioPlaying
@@ -667,14 +616,6 @@ private actor DJLinkEngine {
 
     /// Called while foregrounded, even with the connection sheet closed.
     func autoConnect(model: BoothModel) async {
-        #if DEBUG && targetEnvironment(simulator)
-        if model.demo && ProcessInfo.processInfo.arguments.contains("--ui-test-six-decks") {
-            let now = ProcessInfo.processInfo.systemUptime
-            if mixers.values.contains(where: { now - $0.receivedAt >= 1 }) {
-                mixers = mixers.mapValues { DJLinkMixerObservation(event: $0.event, receivedAt: now) }
-            }
-        }
-        #endif
         guard !model.demo, canRun else { return }
         guard !checking else { checkAgain = true; return }
         guard !busy else { return }

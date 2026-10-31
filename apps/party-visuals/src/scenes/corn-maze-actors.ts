@@ -1,3 +1,4 @@
+import { STILL_DANCE, type MusicDance } from "../../../dj-monitor/src/music-dance.js";
 import * as THREE from "three";
 
 export type ActorKind = "skeleton" | "ghost" | "witch" | "pumpkin" | "shadow";
@@ -11,7 +12,7 @@ export type Actor = {
   root: THREE.Group;
   /** Height of the face, for the camera to look at. */
   face: number;
-  pose(time: number, fright: number): void;
+  pose(time: number, fright: number, dance?: MusicDance, amplitude?: number): void;
 };
 
 /** Bright enough to bloom; eyes ignore the fog so they read from deep in the dark. */
@@ -19,7 +20,14 @@ const glow = (hex: number, strength: number) =>
   new THREE.MeshBasicMaterial({ color: new THREE.Color(hex).multiplyScalar(strength), fog: false });
 
 function builder(root: THREE.Object3D) {
-  return (geometry: THREE.BufferGeometry, material: THREE.Material, x = 0, y = 0, z = 0, parent = root) => {
+  return (
+    geometry: THREE.BufferGeometry,
+    material: THREE.Material,
+    x = 0,
+    y = 0,
+    z = 0,
+    parent = root,
+  ) => {
     const mesh = new THREE.Mesh(geometry, material);
     mesh.position.set(x, y, z);
     parent.add(mesh);
@@ -28,11 +36,22 @@ function builder(root: THREE.Object3D) {
 }
 
 /** A limb hanging down from a joint at (x, y, z); returns the joint so it can swing. */
-function limb(parent: THREE.Object3D, material: THREE.Material, x: number, y: number, z: number, length: number, radius: number) {
+function limb(
+  parent: THREE.Object3D,
+  material: THREE.Material,
+  x: number,
+  y: number,
+  z: number,
+  length: number,
+  radius: number,
+) {
   const joint = new THREE.Group();
   joint.position.set(x, y, z);
   parent.add(joint);
-  const bone = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius * 0.8, length, 6), material);
+  const bone = new THREE.Mesh(
+    new THREE.CylinderGeometry(radius, radius * 0.8, length, 6),
+    material,
+  );
   bone.position.y = -length / 2;
   joint.add(bone);
   const end = new THREE.Group();
@@ -44,7 +63,11 @@ function limb(parent: THREE.Object3D, material: THREE.Material, x: number, y: nu
 function skeleton(): Actor {
   const root = new THREE.Group();
   const add = builder(root);
-  const bone = new THREE.MeshStandardMaterial({ color: 0xb9b19a, roughness: 0.9, emissive: 0x141108 });
+  const bone = new THREE.MeshStandardMaterial({
+    color: 0xb9b19a,
+    roughness: 0.9,
+    emissive: 0x141108,
+  });
   const hollow = new THREE.MeshBasicMaterial({ color: 0x050302 });
   const ember = glow(0xff3010, 6);
 
@@ -54,11 +77,29 @@ function skeleton(): Actor {
   const skull = add(new THREE.SphereGeometry(0.16, 20, 16), bone, 0, 0.09, 0, head);
   skull.scale.set(0.92, 1.05, 1);
   for (const side of [-1, 1]) {
-    add(new THREE.SphereGeometry(0.048, 12, 8), hollow, side * 0.058, 0.1, 0.122, head).scale.z = 0.5;
+    add(new THREE.SphereGeometry(0.048, 12, 8), hollow, side * 0.058, 0.1, 0.122, head).scale.z =
+      0.5;
     add(new THREE.SphereGeometry(0.016, 8, 6), ember, side * 0.058, 0.1, 0.14, head);
   }
   add(new THREE.ConeGeometry(0.022, 0.05, 3), hollow, 0, 0.035, 0.15, head).rotation.x = Math.PI;
-  add(new THREE.BoxGeometry(0.14, 0.03, 0.02), bone, 0, -0.005, 0.135, head);
+  // Individual teeth and a jagged cranial suture survive close flashlight views.
+  for (let i = 0; i < 7; i++) {
+    add(
+      new THREE.BoxGeometry(0.014, 0.027 + (i % 2) * 0.006, 0.025),
+      bone,
+      (i - 3) * 0.019,
+      -0.015,
+      0.144,
+      head,
+    );
+  }
+  const fissure = new THREE.CatmullRomCurve3([
+    new THREE.Vector3(-0.02, 0.24, 0.065),
+    new THREE.Vector3(0.01, 0.21, 0.1),
+    new THREE.Vector3(-0.005, 0.18, 0.125),
+    new THREE.Vector3(0.024, 0.15, 0.14),
+  ]);
+  add(new THREE.TubeGeometry(fissure, 12, 0.003, 4, false), hollow, 0, 0, 0, head);
   const jaw = new THREE.Group();
   jaw.position.set(0, -0.01, 0.02);
   head.add(jaw);
@@ -66,7 +107,13 @@ function skeleton(): Actor {
 
   add(new THREE.CylinderGeometry(0.025, 0.025, 0.62, 6), bone, 0, 1.2, -0.03);
   for (let k = 0; k < 4; k++) {
-    const rib = add(new THREE.TorusGeometry(0.17 - k * 0.018, 0.014, 6, 20, Math.PI * 1.6), bone, 0, 1.45 - k * 0.08, 0.02);
+    const rib = add(
+      new THREE.TorusGeometry(0.17 - k * 0.018, 0.014, 6, 20, Math.PI * 1.6),
+      bone,
+      0,
+      1.45 - k * 0.08,
+      0.02,
+    );
     rib.rotation.set(Math.PI / 2, 0, Math.PI * 0.7);
     rib.scale.set(1, 0.75, 1);
   }
@@ -75,7 +122,8 @@ function skeleton(): Actor {
   const arms = [-1, 1].map((side) => {
     const upper = limb(root, bone, side * 0.21, 1.46, 0, 0.32, 0.022);
     const fore = limb(upper.end, bone, 0, 0, 0, 0.3, 0.018);
-    for (let f = -1; f <= 1; f++) add(new THREE.CylinderGeometry(0.007, 0.005, 0.1, 4), bone, f * 0.02, -0.05, 0, fore.end);
+    for (let f = -1; f <= 1; f++)
+      add(new THREE.CylinderGeometry(0.007, 0.005, 0.1, 4), bone, f * 0.02, -0.05, 0, fore.end);
     return { side, upper: upper.joint, fore: fore.joint };
   });
   for (const side of [-1, 1]) {
@@ -132,6 +180,9 @@ function ghost(): Actor {
     const hem = THREE.MathUtils.smoothstep(1.0 - y, 0, 0.6);
     const angle = Math.atan2(position.getX(i), position.getZ(i));
     position.setY(i, y + Math.sin(angle * 9) * 0.09 * hem);
+    const fold = 1 + Math.sin(angle * 16 + y * 1.5) * 0.045 * Math.max(0, 1.8 - y);
+    position.setX(i, position.getX(i) * fold);
+    position.setZ(i, position.getZ(i) * fold);
   }
   shroud.computeVertexNormals();
   const body = add(shroud, veil);
@@ -157,8 +208,16 @@ function ghost(): Actor {
     face: 1.6,
     pose(time, fright) {
       body.rotation.y = Math.sin(time * 1.7) * 0.12;
-      body.scale.set(1 + Math.sin(time * 5) * 0.03, 1 + fright * 0.08, 1 + Math.sin(time * 4.3) * 0.03);
-      mouth.scale.set(0.9 - fright * 0.2, 1.3 + fright * 2.2 + Math.sin(time * 40) * 0.2 * fright, 0.4);
+      body.scale.set(
+        1 + Math.sin(time * 5) * 0.03,
+        1 + fright * 0.08,
+        1 + Math.sin(time * 4.3) * 0.03,
+      );
+      mouth.scale.set(
+        0.9 - fright * 0.2,
+        1.3 + fright * 2.2 + Math.sin(time * 40) * 0.2 * fright,
+        0.4,
+      );
       mouth.position.y = 1.42 - fright * 0.08;
       for (const eye of eyes) eye.scale.y = 1.4 + fright * 0.5;
       for (const arm of arms) {
@@ -173,8 +232,16 @@ function ghost(): Actor {
 function witch(): Actor {
   const root = new THREE.Group();
   const add = builder(root);
-  const robe = new THREE.MeshStandardMaterial({ color: 0x2a1640, roughness: 0.9, emissive: 0x12061e });
-  const skin = new THREE.MeshStandardMaterial({ color: 0x7cc046, roughness: 0.6, emissive: 0x2c5a10 });
+  const robe = new THREE.MeshStandardMaterial({
+    color: 0x2a1640,
+    roughness: 0.9,
+    emissive: 0x12061e,
+  });
+  const skin = new THREE.MeshStandardMaterial({
+    color: 0x7cc046,
+    roughness: 0.6,
+    emissive: 0x2c5a10,
+  });
   const hair = new THREE.MeshStandardMaterial({ color: 0x3b3a40, roughness: 1 });
   const band = new THREE.MeshStandardMaterial({ color: 0x7a2ba8, emissive: 0x2a0840 });
   const wood = new THREE.MeshStandardMaterial({ color: 0x4a3018, roughness: 1 });
@@ -188,13 +255,22 @@ function witch(): Actor {
   head.position.set(0, 1.62, 0);
   root.add(head);
   add(new THREE.SphereGeometry(0.155, 18, 14), skin, 0, 0, 0, head).scale.set(0.95, 1.1, 1);
-  add(new THREE.ConeGeometry(0.03, 0.17, 8), skin, 0, -0.01, 0.2, head).rotation.x = Math.PI / 2 + 0.3;
+  add(new THREE.ConeGeometry(0.03, 0.17, 8), skin, 0, -0.01, 0.2, head).rotation.x =
+    Math.PI / 2 + 0.3;
   add(new THREE.ConeGeometry(0.04, 0.12, 8), skin, 0, -0.17, 0.09, head).rotation.x = Math.PI - 0.5;
-  for (const side of [-1, 1]) add(new THREE.SphereGeometry(0.024, 8, 6), eyesGlow, side * 0.058, 0.04, 0.135, head);
+  for (const side of [-1, 1])
+    add(new THREE.SphereGeometry(0.024, 8, 6), eyesGlow, side * 0.058, 0.04, 0.135, head);
   const mouth = add(new THREE.BoxGeometry(0.09, 0.02, 0.02), hollow, 0, -0.075, 0.135, head);
   for (let k = 0; k < 9; k++) {
     const angle = Math.PI * (0.35 + (k / 8) * 1.3);
-    const lock = add(new THREE.BoxGeometry(0.04, 0.55, 0.02), hair, Math.cos(angle) * 0.15, -0.18, Math.sin(angle) * -0.13, head);
+    const lock = add(
+      new THREE.BoxGeometry(0.04, 0.55, 0.02),
+      hair,
+      Math.cos(angle) * 0.15,
+      -0.18,
+      Math.sin(angle) * -0.13,
+      head,
+    );
     lock.rotation.set(Math.sin(angle) * 0.2, 0, Math.cos(angle) * -0.2);
   }
   const hat = new THREE.Group();
@@ -210,7 +286,14 @@ function witch(): Actor {
     const sleeve = limb(root, robe, side * 0.24, 1.42, 0, 0.5, 0.06);
     add(new THREE.SphereGeometry(0.045, 10, 8), skin, 0, 0, 0, sleeve.end);
     for (let f = -1; f <= 1; f++) {
-      const finger = add(new THREE.CylinderGeometry(0.008, 0.004, 0.13, 4), skin, f * 0.022, -0.07, 0.01, sleeve.end);
+      const finger = add(
+        new THREE.CylinderGeometry(0.008, 0.004, 0.13, 4),
+        skin,
+        f * 0.022,
+        -0.07,
+        0.01,
+        sleeve.end,
+      );
       finger.rotation.x = 0.3;
     }
     return { side, joint: sleeve.joint };
@@ -219,7 +302,8 @@ function witch(): Actor {
   const broom = new THREE.Group();
   broom.position.set(0, 0.55, 0);
   root.add(broom);
-  add(new THREE.CylinderGeometry(0.025, 0.025, 1.9, 6), wood, 0, 0, 0, broom).rotation.x = Math.PI / 2;
+  add(new THREE.CylinderGeometry(0.025, 0.025, 1.9, 6), wood, 0, 0, 0, broom).rotation.x =
+    Math.PI / 2;
   const bristles = add(new THREE.ConeGeometry(0.16, 0.5, 10, 1, true), straw, 0, 0, -1.1, broom);
   bristles.rotation.x = -Math.PI / 2;
 
@@ -248,12 +332,20 @@ function pumpkin(): Actor {
   const shirt = new THREE.MeshStandardMaterial({ color: 0x7c2c1a, roughness: 1 });
   const denim = new THREE.MeshStandardMaterial({ color: 0x2c3a55, roughness: 1 });
   const straw = new THREE.MeshStandardMaterial({ color: 0xc9a650, roughness: 1 });
-  const rind = new THREE.MeshStandardMaterial({ color: 0xc0561a, roughness: 0.7, emissive: 0x0a0300 });
+  const rind = new THREE.MeshStandardMaterial({
+    color: 0xc0561a,
+    roughness: 0.7,
+    emissive: 0x0a0300,
+  });
   const stem = new THREE.MeshStandardMaterial({ color: 0x4d5a22, roughness: 1 });
-  const candle = new THREE.MeshBasicMaterial({ color: new THREE.Color(0xffa020).multiplyScalar(3), fog: false });
+  const candle = new THREE.MeshBasicMaterial({
+    color: new THREE.Color(0xffa020).multiplyScalar(3),
+    fog: false,
+  });
 
   add(new THREE.CylinderGeometry(0.05, 0.06, 2.4, 6), wood, 0, 1.2, -0.12);
-  add(new THREE.CylinderGeometry(0.04, 0.04, 1.6, 6), wood, 0, 1.42, -0.12).rotation.z = Math.PI / 2;
+  add(new THREE.CylinderGeometry(0.04, 0.04, 1.6, 6), wood, 0, 1.42, -0.12).rotation.z =
+    Math.PI / 2;
   add(new THREE.BoxGeometry(0.56, 0.62, 0.3), shirt, 0, 1.25, 0);
   for (const side of [-1, 1]) {
     add(new THREE.BoxGeometry(0.2, 0.7, 0.22), denim, side * 0.13, 0.62, 0);
@@ -268,7 +360,8 @@ function pumpkin(): Actor {
     joint.position.set(side * 0.26, 0, 0);
     torso.add(joint);
     add(new THREE.BoxGeometry(0.5, 0.16, 0.18), shirt, side * 0.25, 0, 0, joint);
-    add(new THREE.ConeGeometry(0.08, 0.28, 6), straw, side * 0.62, 0, 0, joint).rotation.z = side * -Math.PI / 2;
+    add(new THREE.ConeGeometry(0.08, 0.28, 6), straw, side * 0.62, 0, 0, joint).rotation.z =
+      (side * -Math.PI) / 2;
     return { side, joint };
   });
 
@@ -285,7 +378,8 @@ function pumpkin(): Actor {
   }
   shell.computeVertexNormals();
   add(shell, rind, 0, 0, 0, head);
-  add(new THREE.CylinderGeometry(0.03, 0.045, 0.12, 6), stem, 0.01, 0.25, 0, head).rotation.z = 0.25;
+  add(new THREE.CylinderGeometry(0.03, 0.045, 0.12, 6), stem, 0.01, 0.25, 0, head).rotation.z =
+    0.25;
   for (const side of [-1, 1]) {
     const eye = add(new THREE.CircleGeometry(0.07, 3), candle, side * 0.1, 0.06, 0.285, head);
     eye.rotation.z = Math.PI / 2;
@@ -309,7 +403,8 @@ function pumpkin(): Actor {
       head.rotation.z = Math.sin(time * 1.2) * 0.08 + fright * 0.35 * Math.sin(time * 14);
       head.rotation.x = -fright * 0.15;
       torso.rotation.x = fright * 0.35;
-      for (const arm of arms) arm.joint.rotation.y = arm.side * -fright * (1.1 + Math.sin(time * 18 + arm.side) * 0.15);
+      for (const arm of arms)
+        arm.joint.rotation.y = arm.side * -fright * (1.1 + Math.sin(time * 18 + arm.side) * 0.15);
       candle.color.setHex(0xffa020).multiplyScalar(1.6 + fright * 1.4 + Math.sin(time * 23) * 0.3);
     },
   };
@@ -327,13 +422,28 @@ function shadow(): Actor {
   head.position.y = 2.36;
   root.add(head);
   add(new THREE.SphereGeometry(0.17, 16, 12), void_, 0, 0, 0, head).scale.set(0.85, 1.25, 0.9);
-  for (const side of [-1, 1]) add(new THREE.SphereGeometry(0.028, 8, 6), ember, side * 0.06, 0.04, 0.135, head);
-  const grin = add(new THREE.TorusGeometry(0.075, 0.007, 4, 16, Math.PI), smile, 0, -0.06, 0.14, head);
+  for (const side of [-1, 1])
+    add(new THREE.SphereGeometry(0.028, 8, 6), ember, side * 0.06, 0.04, 0.135, head);
+  const grin = add(
+    new THREE.TorusGeometry(0.075, 0.007, 4, 16, Math.PI),
+    smile,
+    0,
+    -0.06,
+    0.14,
+    head,
+  );
   grin.rotation.z = Math.PI;
   const arms = [-1, 1].map((side) => {
     const arm = limb(root, void_, side * 0.28, 2.02, 0, 1.2, 0.045);
     for (let f = -2; f <= 2; f++) {
-      const finger = add(new THREE.CylinderGeometry(0.008, 0.003, 0.24, 4), void_, f * 0.018, -0.1, 0, arm.end);
+      const finger = add(
+        new THREE.CylinderGeometry(0.008, 0.003, 0.24, 4),
+        void_,
+        f * 0.018,
+        -0.1,
+        0,
+        arm.end,
+      );
       finger.rotation.z = f * 0.12;
     }
     return { side, joint: arm.joint };
@@ -359,24 +469,63 @@ function shadow(): Actor {
 export const ACTOR_KINDS: ActorKind[] = ["skeleton", "ghost", "witch", "pumpkin", "shadow"];
 
 export function createActor(kind: ActorKind): Actor {
-  switch (kind) {
-    case "skeleton":
-      return skeleton();
-    case "ghost":
-      return ghost();
-    case "witch":
-      return witch();
-    case "pumpkin":
-      return pumpkin();
-    case "shadow":
-      return shadow();
-  }
+  const actor = { skeleton, ghost, witch, pumpkin, shadow }[kind]();
+  // A visual pivot keeps choreography separate from path placement and scare targeting.
+  const root = new THREE.Group();
+  root.add(actor.root);
+  return {
+    kind, root, face: actor.face,
+    pose(time, fright, dance = STILL_DANCE, amplitude = 0) {
+      actor.pose(time, fright);
+      const amount = Math.max(0, amplitude);
+      actor.root.position.y = dance.bounce * amount * 0.28;
+      actor.root.rotation.set(dance.nod * amount * 0.12, dance.twist * amount * 0.3, dance.sway * amount * 0.2);
+    },
+  };
 }
 
 export function disposeActor(actor: Actor) {
+  const geometries = new Set<THREE.BufferGeometry>();
+  const materials = new Set<THREE.Material>();
   actor.root.traverse((object) => {
     if (!(object instanceof THREE.Mesh)) return;
-    object.geometry.dispose();
-    (object.material as THREE.Material).dispose();
+    geometries.add(object.geometry);
+    for (const material of Array.isArray(object.material) ? object.material : [object.material])
+      materials.add(material);
   });
+  for (const geometry of geometries) geometry.dispose();
+  for (const material of materials) material.dispose();
+}
+
+/** Shared carved lantern geometry; callers batch the returned static props. */
+export function pumpkinLanternKit(keep: <T extends { dispose(): void }>(resource: T) => T) {
+  const body = keep(new THREE.SphereGeometry(0.48, 24, 16));
+  const positions = body.getAttribute("position");
+  for (let i = 0; i < positions.count; i++) {
+    const angle = Math.atan2(positions.getZ(i), positions.getX(i));
+    const rib = 1 + Math.cos(angle * 10) * 0.065;
+    positions.setXYZ(i, positions.getX(i) * rib, positions.getY(i) * 0.86, positions.getZ(i) * rib);
+  }
+  body.computeVertexNormals();
+  const skin = keep(new THREE.MeshStandardMaterial({ color: 0xec6816, roughness: 0.64, emissive: 0x481000, emissiveIntensity: 0.5 }));
+  const stem = keep(new THREE.CylinderGeometry(0.045, 0.075, 0.2, 7));
+  const wood = keep(new THREE.MeshStandardMaterial({ color: 0x38422b, roughness: 1 }));
+  const polygons = [
+    [[-0.27, 0.06], [-0.17, 0.23], [-0.07, 0.06]],
+    [[0.07, 0.06], [0.17, 0.23], [0.27, 0.06]],
+    [[-0.3, -0.07], [-0.15, -0.13], [-0.11, -0.06], [0, -0.15], [0.1, -0.07], [0.15, -0.13], [0.3, -0.07], [0.19, -0.26], [-0.19, -0.26]],
+  ];
+  const face = keep(new THREE.ShapeGeometry(polygons.map((points) => {
+    const shape = new THREE.Shape();
+    points.forEach(([x, y], i) => i ? shape.lineTo(x!, y!) : shape.moveTo(x!, y!));
+    shape.closePath(); return shape;
+  })));
+  const fire = keep(new THREE.MeshBasicMaterial({ color: new THREE.Color(0xffc54b).multiplyScalar(2.1), side: THREE.DoubleSide }));
+  return () => {
+    const root = new THREE.Group();
+    root.add(new THREE.Mesh(body, skin));
+    const stalk = new THREE.Mesh(stem, wood); stalk.position.y = 0.48; stalk.rotation.z = -0.2; root.add(stalk);
+    const carving = new THREE.Mesh(face, fire); carving.position.z = 0.455; root.add(carving);
+    return root;
+  };
 }

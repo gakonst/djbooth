@@ -20,5 +20,5 @@
     "target": "ES2024",
     "verbatimModuleSyntax": true
   },
-  "include": ["src", "test"]
+  "include": ["src"]
 }

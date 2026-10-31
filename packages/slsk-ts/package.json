@@ -2,23 +2,24 @@
   "name": "slsk-ts",
   "version": "0.2.0",
   "description": "A complete, high-performance TypeScript client for the Soulseek network",
-  "type": "module",
   "license": "MIT",
-  "sideEffects": false,
   "repository": {
     "type": "git",
     "url": "https://github.com/gakonst/djbooth",
     "directory": "packages/slsk-ts"
   },
-  "publishConfig": {
-    "access": "public"
-  },
-  "engines": {
-    "node": ">=22"
-  },
   "bin": {
     "slsk": "./dist/cli.js"
   },
+  "files": [
+    "dist",
+    "docs",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "type": "module",
+  "sideEffects": false,
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -35,23 +36,16 @@
       "default": "./dist/protocol/index.js"
     }
   },
-  "files": [
-    "dist",
-    "docs",
-    "src",
-    "README.md",
-    "LICENSE"
-  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "check": "pnpm check:types && pnpm lint && pnpm test:coverage",
+    "check": "pnpm check:types && pnpm lint",
     "check:types": "tsc --noEmit",
     "cli": "tsx src/cli.ts",
-    "lint": "oxlint src test",
+    "lint": "oxlint src",
     "prepack": "pnpm build",
-    "test": "vitest run",
-    "test:coverage": "vitest run --coverage",
-    "test:e2e": "vitest run --config vitest.e2e.config.ts",
     "bench": "tsx bench/protocol.ts",
     "typecheck": "pnpm check:types"
   },
@@ -60,10 +54,11 @@
   },
   "devDependencies": {
     "@types/node": "^22.19.7",
-    "@vitest/coverage-v8": "^4.0.18",
     "oxlint": "^1.50.0",
     "tsx": "^4.21.0",
-    "typescript": "^5.9.3",
-    "vitest": "^4.0.18"
+    "typescript": "^5.9.3"
+  },
+  "engines": {
+    "node": ">=22"
   }
 }

@@ -40,7 +40,18 @@ export class PreviewDeck {
   }
 
   get bpm() {
-    return (this.track?.bpm ?? 120) * this.audio.playbackRate;
+    return this.sourceBpm * this.audio.playbackRate;
+  }
+
+  /** Tempo in source-file seconds; currentTime already accounts for playback speed. */
+  get sourceBpm() {
+    const bpm = this.track?.bpm ?? 120;
+    return Number.isFinite(bpm) && bpm > 0 ? bpm : 120;
+  }
+
+  /** Unlock the audio graph from a user gesture before loading a set. */
+  unlock() {
+    this.connect();
   }
 
   /** Browsers only allow audio graphs after a user gesture; call from a key or click. */
@@ -59,23 +70,28 @@ export class PreviewDeck {
     void context.resume();
   }
 
-  async load(track: LibraryTrack) {
+  async load(track: LibraryTrack, options: { autoplay?: boolean; signal?: AbortSignal } = {}) {
     const load = ++this.loads;
+    options.signal?.throwIfAborted();
     this.connect();
+    this.audio.pause();
     this.track = track;
     this.waveform = null;
     this.rhythm = null;
     this.audio.src = `/api/audio/${encodeURIComponent(track.id)}`;
-    await this.audio.play();
+    if (options.autoplay !== false) await this.audio.play();
+    else this.audio.load();
     const id = encodeURIComponent(track.id);
     const [waveform, rhythm] = await Promise.all([
-      fetch(`/api/waveforms/${id}`),
+      fetch(`/api/waveforms/${id}`, { signal: options.signal }),
       // Older workbenches have no rhythm route; the chart then reads the colour waveform.
-      fetch(`/api/rhythm/${id}`).catch(() => undefined),
+      fetch(`/api/rhythm/${id}`, { signal: options.signal }).catch(() => undefined),
     ]);
     if (load !== this.loads) return;
+    options.signal?.throwIfAborted();
     if (rhythm?.ok) this.rhythm = ((await rhythm.json()) as { rhythm: TrackRhythm }).rhythm;
-    if (waveform.ok) this.waveform = ((await waveform.json()) as { waveform: TrackWaveform }).waveform;
+    if (waveform.ok)
+      this.waveform = ((await waveform.json()) as { waveform: TrackWaveform }).waveform;
   }
 
   async toggle() {
@@ -92,7 +108,8 @@ export class PreviewDeck {
 
   setFader(value: number) {
     this.fader = Math.max(0, Math.min(1, value));
-    if (this.gain && context) this.gain.gain.setTargetAtTime(this.fader * 0.8, context.currentTime, 0.02);
+    if (this.gain && context)
+      this.gain.gain.setTargetAtTime(this.fader * 0.8, context.currentTime, 0.02);
   }
 }
 

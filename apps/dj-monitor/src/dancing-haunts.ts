@@ -1,21 +1,35 @@
+import { createDanceMotion, type MusicDance } from "./music-dance.js";
 import * as THREE from "three";
 
 /** Two articulated paper silhouettes, facing the camera along local +Z. */
 export function createDancingHaunts(): {
   group: THREE.Group;
-  update(time: number, beat: number, energy: number, motion: number): void;
+  update(time: number, beat: number, energy: number, motion: number, dance?: MusicDance): void;
   dispose(): void;
 } {
+  const danceMotion = createDanceMotion();
+  let previous: number | undefined;
   const group = new THREE.Group();
   group.name = "dancing-paper-haunts";
-  const paper = new THREE.MeshBasicMaterial({ color: 0xe1d6af, side: THREE.DoubleSide });
+  const paper = new THREE.MeshStandardMaterial({
+    color: 0xd4c4a6,
+    roughness: 0.86,
+    emissive: 0x211a14,
+    emissiveIntensity: 0.25,
+    side: THREE.DoubleSide,
+  });
   const ink = new THREE.MeshBasicMaterial({ color: 0x100e0c, side: THREE.DoubleSide });
-  const red = new THREE.MeshBasicMaterial({ color: 0x992e2a, side: THREE.DoubleSide });
-  const faded = new THREE.MeshBasicMaterial({ color: 0xb5a77e, side: THREE.DoubleSide });
+  const red = new THREE.MeshBasicMaterial({ color: 0xc06132, side: THREE.DoubleSide });
+  const faded = new THREE.MeshBasicMaterial({ color: 0xa89c98, side: THREE.DoubleSide });
   const geometries = new Set<THREE.BufferGeometry>();
   const circle = new THREE.CircleGeometry(1, 16);
   geometries.add(circle);
-  function silhouette(parent: THREE.Group, path: THREE.Shape, material = paper, z = 0) {
+  function silhouette(
+    parent: THREE.Group,
+    path: THREE.Shape,
+    material: THREE.Material = paper,
+    z = 0,
+  ) {
     const geometry = new THREE.ShapeGeometry(path, 16);
     geometries.add(geometry);
     const mesh = new THREE.Mesh(geometry, material);
@@ -29,7 +43,7 @@ export function createDancingHaunts(): {
     y: number,
     rx: number,
     ry: number,
-    material = paper,
+    material: THREE.Material = paper,
     z = 0.025,
   ) {
     const mesh = new THREE.Mesh(circle, material);
@@ -42,7 +56,7 @@ export function createDancingHaunts(): {
     parent: THREE.Group,
     points: number[][],
     radius = 0.018,
-    material = paper,
+    material: THREE.Material = paper,
     z = 0.015,
   ) {
     const curve = new THREE.CatmullRomCurve3(
@@ -345,32 +359,98 @@ export function createDancingHaunts(): {
     0.035,
   );
 
+  // Engraved bone cracks and stitch marks keep the close silhouettes legible.
+  for (let i = 0; i < 6; i++) {
+    const y = 0.32 - i * 0.09;
+    stroke(
+      torso,
+      [
+        [-0.01, y],
+        [0.028, y - 0.018],
+        [0.005, y - 0.034],
+      ],
+      0.004,
+      faded,
+      0.045,
+    );
+  }
+  stroke(
+    head,
+    [
+      [0.035, 0.37],
+      [0.005, 0.29],
+      [0.045, 0.25],
+      [0.025, 0.2],
+    ],
+    0.006,
+    faded,
+    0.045,
+  );
+  for (let i = 0; i < 7; i++) {
+    const y = 0.23 - i * 0.105;
+    stroke(
+      sheet,
+      [
+        [-0.055, y],
+        [0.025, y - 0.035],
+      ],
+      0.005,
+      faded,
+      0.045,
+    );
+  }
+  const patch = new THREE.Shape();
+  patch.moveTo(0.18, -0.26);
+  patch.lineTo(0.32, -0.29);
+  patch.lineTo(0.29, -0.44);
+  patch.lineTo(0.15, -0.4);
+  patch.closePath();
+  silhouette(sheet, patch, faded, 0.035);
+  for (let i = 0; i < 4; i++)
+    stroke(
+      sheet,
+      [
+        [0.16 + i * 0.04, -0.265 - i * 0.008],
+        [0.17 + i * 0.04, -0.3 - i * 0.008],
+      ],
+      0.004,
+      ink,
+      0.045,
+    );
+
   return {
     group,
-    update(time, beat, energy, motion) {
-      const drive = THREE.MathUtils.clamp(energy, 0, 1) * THREE.MathUtils.clamp(motion, 0, 1);
-      const kick = THREE.MathUtils.clamp(beat, 0, 1) * drive;
-      const phase = time * 5.4;
-      const sway = Math.sin(phase);
-      const idle = Math.sin(time * 1.3) * 0.018;
-      skeleton.rotation.z = idle + sway * drive * 0.1;
-      skeleton.position.y = -0.04 + kick * 0.075 + Math.sin(phase * 2) * drive * 0.025;
-      head.rotation.z = -0.12 + idle + Math.sin(phase + 0.6) * drive * 0.16;
-      leftArm.upper.rotation.z = -1.15 + sway * drive * 0.38;
-      leftArm.lower.rotation.z = -1.15 + Math.sin(phase + 1) * drive * 0.35;
-      rightArm.upper.rotation.z = 1.08 + sway * drive * 0.4;
-      rightArm.lower.rotation.z = 1.2 + Math.sin(phase - 1) * drive * 0.4;
-      leftLeg.upper.rotation.z = -0.25 + sway * drive * 0.32;
-      rightLeg.upper.rotation.z = 0.24 - sway * drive * 0.32;
-      leftLeg.lower.rotation.z = 0.18 + Math.max(0, -sway) * drive * 0.5;
-      rightLeg.lower.rotation.z = -0.18 - Math.max(0, sway) * drive * 0.5;
-      ghost.position.y = 0.02 + Math.sin(time * 1.4 + 1) * 0.025 + kick * 0.09;
-      sheet.rotation.z = -idle - sway * drive * 0.09;
-      sheet.scale.y = 1 + Math.sin(phase + 0.8) * drive * 0.025;
-      ghostLeft.rotation.z = idle + Math.sin(phase + 1) * drive * 0.26;
-      ghostRight.rotation.z = -idle + Math.sin(phase - 1) * drive * 0.3;
+    update(time, beat, energy, motion, supplied) {
+      const dt = previous === undefined ? 0 : time - previous;
+      previous = time;
+      const dance = supplied ?? danceMotion.update(beat, energy, energy, energy, energy * 0.3, dt);
+      const amount = THREE.MathUtils.clamp(motion, 0, 2);
+      const sway = dance.sway * amount;
+      const lift = dance.bounce * amount;
+      const nod = dance.nod * amount;
+      const twist = dance.twist * amount;
+      const tap = dance.tap * amount;
+      skeleton.rotation.z = sway * 0.1;
+      skeleton.position.y = -0.04 + lift * 0.095;
+      torso.rotation.y = twist * 0.13;
+      head.rotation.z = -0.12 - nod * 0.14;
+      head.rotation.y = twist * 0.16;
+      leftArm.upper.rotation.z = -1.15 + sway * 0.38;
+      leftArm.lower.rotation.z = -1.15 - nod * 0.28 + tap * 0.12;
+      rightArm.upper.rotation.z = 1.08 + sway * 0.4;
+      rightArm.lower.rotation.z = 1.2 + nod * 0.28 - tap * 0.12;
+      leftLeg.upper.rotation.z = -0.25 + sway * 0.24;
+      rightLeg.upper.rotation.z = 0.24 - sway * 0.24;
+      leftLeg.lower.rotation.z = 0.18 + Math.max(0, -dance.sway) * dance.bounce * amount * 0.4;
+      rightLeg.lower.rotation.z = -0.18 - Math.max(0, dance.sway) * dance.bounce * amount * 0.4;
+      ghost.position.y = 0.02 + lift * 0.13;
+      sheet.rotation.z = -sway * 0.09;
+      sheet.rotation.y = -twist * 0.12;
+      sheet.scale.y = 1 - dance.kick * amount * 0.025 + lift * 0.025;
+      ghostLeft.rotation.z = sway * 0.23 + tap * 0.12;
+      ghostRight.rotation.z = -sway * 0.23 - tap * 0.12;
       boots.forEach((boot, i) => {
-        boot.rotation.z = Math.sin(phase + i * Math.PI) * drive * 0.3;
+        boot.rotation.z = (i ? -1 : 1) * sway * 0.3;
       });
     },
     dispose() {

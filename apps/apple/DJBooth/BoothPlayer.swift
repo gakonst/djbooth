@@ -100,10 +100,6 @@ import DJBoothKit
         PerformanceProbe.event("player_init_begin")
         player = AVPlayer()
         PerformanceProbe.event("player_engine_ready")
-        #if DEBUG
-        // UI verification can exercise real cached audio without touching system volume.
-        player.isMuted = ProcessInfo.processInfo.arguments.contains("--ui-test-muted")
-        #endif
         timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.5, preferredTimescale: 600), queue: .main) { [weak self] _ in
             Task { @MainActor in
                 guard let self, self.player.currentItem != nil, self.pendingSeek == nil, self.scrubSession == nil else { return }
@@ -199,22 +195,6 @@ import DJBoothKit
             guard let self, self.playbackGeneration == generation, self.itemGeneration == attachment else { return }
             PerformanceProbe.event("player_mime_ready", trackID: track.id)
             let asset = AudioFiles.playbackAsset(url: url, mimeType: mime)
-            #if DEBUG
-            if ProcessInfo.processInfo.arguments.contains("--ui-test-load-asset") {
-                PerformanceProbe.event("player_asset_load_begin", trackID: track.id)
-                do {
-                    let (playable, _) = try await asset.load(.isPlayable, .duration)
-                    guard self.playbackGeneration == generation, self.itemGeneration == attachment else { return }
-                    PerformanceProbe.event(playable ? "player_asset_load_ready" : "player_asset_unplayable", trackID: track.id)
-                } catch {
-                    guard self.playbackGeneration == generation, self.itemGeneration == attachment else { return }
-                    PerformanceProbe.event("player_asset_load_failed", trackID: track.id)
-                    self.preparingItem = false; self.wantsToPlay = false
-                    self.error = error.localizedDescription
-                    return
-                }
-            }
-            #endif
             self.installItem(asset: asset, generation: generation)
         }
     }

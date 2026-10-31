@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { resolve } from "node:path";
 import react from "@vitejs/plugin-react";
@@ -34,6 +34,22 @@ function showStore(): Plugin {
       response.writeHead(status, { "content-type": type, "cache-control": "no-store" });
       response.end(data);
     };
+    if (url.pathname === "/clips" && request.method === "GET") {
+      const directory = resolve(import.meta.dirname, "public/clips");
+      const names = await readdir(directory).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") return [];
+        throw error;
+      });
+      const files = await Promise.all(
+        names
+          .filter((name) => /^[\w-]{11}\.mp4$/.test(name))
+          .map(async (name) => {
+            const file = await stat(resolve(directory, name)).catch(() => null);
+            return file?.isFile() && file.size > 0 ? name.slice(0, -4) : null;
+          }),
+      );
+      return send(200, "application/json", JSON.stringify({ ids: files.filter(Boolean) }));
+    }
     if (url.pathname === "/show") {
       if (request.method === "GET") {
         try {

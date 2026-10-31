@@ -13,7 +13,7 @@
     "verbatimModuleSyntax": true,
     "resolveJsonModule": true,
     "skipLibCheck": true,
-    "types": ["node", "vitest/globals"]
+    "types": ["node"]
   },
-  "include": ["src", "scripts", "test", "tsup.config.ts", "eslint.config.js"]
+  "include": ["src", "scripts", "tsup.config.ts", "eslint.config.js"]
 }

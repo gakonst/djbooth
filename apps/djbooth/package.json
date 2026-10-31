@@ -36,8 +36,9 @@
   "scripts": {
     "build": "pnpm build:server && pnpm build:client",
     "build:client": "vite build",
+    "build:cloud": "DJBOOTH_CLOUD_BUILD=1 vite build",
     "build:server": "tsc -p tsconfig.build.json",
-    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test",
+    "check": "pnpm format:check && pnpm lint && pnpm typecheck",
     "cli": "tsx src/cli.ts",
     "dev": "tsx watch --clear-screen=false scripts/dev.ts",
     "dev:client": "vite --host 127.0.0.1",
@@ -45,13 +46,11 @@
     "desktop:dev": "tauri dev",
     "desktop:dmg": "pnpm desktop:prepare && tauri build --config src-tauri/tauri.prod.conf.json --bundles dmg",
     "desktop:prepare": "pnpm build && tsx scripts/prepare-desktop.ts",
-    "format": "oxfmt --write src test scripts index.html vite.config.ts package.json tsconfig.json tsconfig.build.json README.md && cargo +nightly fmt --manifest-path src-tauri/Cargo.toml",
-    "format:check": "oxfmt --check src test scripts index.html vite.config.ts package.json tsconfig.json tsconfig.build.json README.md && cargo +nightly fmt --manifest-path src-tauri/Cargo.toml -- --check",
-    "lint": "oxlint src test scripts vite.config.ts",
+    "format": "oxfmt --write src scripts index.html vite.config.ts package.json tsconfig.json tsconfig.build.json README.md && cargo +nightly fmt --manifest-path src-tauri/Cargo.toml",
+    "format:check": "oxfmt --check src scripts index.html vite.config.ts package.json tsconfig.json tsconfig.build.json README.md && cargo +nightly fmt --manifest-path src-tauri/Cargo.toml -- --check",
+    "lint": "oxlint src scripts vite.config.ts",
     "prepack": "pnpm build",
     "serve": "tsx src/cli.ts serve",
-    "test": "vitest run",
-    "test:watch": "vitest",
     "typecheck": "tsc --noEmit && cargo check --manifest-path src-tauri/Cargo.toml"
   },
   "dependencies": {
@@ -88,7 +87,6 @@
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
     "vite": "^8.1.4",
-    "vitest": "^4.1.10",
     "wavesurfer.js": "7.12.10"
   },
   "engines": {

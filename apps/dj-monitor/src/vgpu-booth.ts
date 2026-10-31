@@ -1,3 +1,4 @@
+import { createDanceMotion, type MusicDance } from "./music-dance.js";
 import { effect, frame, init, sampler, surface, target, texture } from "vgpu";
 import sculptureSource from "./shaders/prismatic-field.wgsl?raw";
 import extractSource from "./shaders/bloom-extract.wgsl?raw";
@@ -6,6 +7,29 @@ import presentSource from "./shaders/prismatic-present.wgsl?raw";
 
 /** Vercel vgpu renderer; consumes the same real, independent deck signals as the booth. */
 export async function createVgpuBooth(host: HTMLCanvasElement) {
+  const reduced = matchMedia("(prefers-reduced-motion: reduce)");
+  const danceMotion = createDanceMotion();
+  let suppliedDance: MusicDance | undefined;
+  let danceAmount = 1;
+  let dancePrevious: number | undefined;
+  let danceLeader = 0;
+  const readDance = (time: number, energy: Float32Array, motion: Float32Array) => {
+    for (let lane = 0; lane < 3; lane++)
+      if ((energy[lane * 4] ?? 0) > (energy[danceLeader * 4] ?? 0) * 1.25 + 0.01)
+        danceLeader = lane;
+    const e = danceLeader * 4;
+    const dt = dancePrevious === undefined ? 0 : time - dancePrevious;
+    dancePrevious = time;
+    const fallback = danceMotion.update(
+      motion[e + 3] ?? 0,
+      energy[e] ?? 0,
+      energy[e + 1] ?? 0,
+      energy[e + 2] ?? 0,
+      energy[e + 3] ?? 0,
+      dt,
+    );
+    return suppliedDance ?? fallback;
+  };
   const gpu = await init({ powerPreference: "high-performance", label: "DJ booth prism" });
   const canvas = document.createElement("canvas");
   canvas.className = "booth-visuals vgpu-booth";
@@ -65,6 +89,7 @@ export async function createVgpuBooth(host: HTMLCanvasElement) {
       motion2: [0, 0, 0, 0],
       booth: [0, 0, 0, 0],
       drive: [0, 0, 0, 0],
+      groove: [0, 0, 0, 0],
     };
     let pixelBudget = 850_000;
     const booth = host.parentElement?.querySelector<HTMLElement>(".booth-grid");
@@ -154,10 +179,22 @@ export async function createVgpuBooth(host: HTMLCanvasElement) {
       frames = 0,
       diagnosticsAt = 0;
     return {
+      setLook(value: { motion: number }) {
+        danceAmount = Number.isFinite(value.motion) ? Math.max(0, Math.min(2, value.motion)) : 1;
+      },
+      setDance(value: MusicDance) {
+        suppliedDance = value;
+      },
       dispose,
       draw(time: number, rgba: Uint8Array, energy: Float32Array, motion: Float32Array) {
         if (failure) throw failure;
         if (disposed || document.hidden || inFlight >= 2) return;
+        const dance = readDance(time, energy, motion);
+        const amount = reduced.matches ? 0 : danceAmount;
+        scene.groove[0] = dance.sway * amount;
+        scene.groove[1] = dance.bounce * amount;
+        scene.groove[2] = dance.twist * amount;
+        scene.groove[3] = dance.tap * amount;
         const now = performance.now();
         const delta = now - lastFrame;
         lastFrame = now;

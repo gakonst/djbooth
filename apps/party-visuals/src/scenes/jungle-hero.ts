@@ -1,3 +1,6 @@
+import { pumpkinLanternKit } from "./corn-maze-actors.js";
+import { STILL_DANCE, type MusicDance } from "../../../dj-monitor/src/music-dance.js";
+import { createHauntedKit, instanceStaticProps } from "./haunted-materials.js";
 import * as THREE from "three";
 import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
@@ -12,7 +15,7 @@ import {
   type Chart,
   type Note,
 } from "../music/note-chart.js";
-import { sectionAt, type Style } from "../music/song-map.js";
+import { sectionAt } from "../music/song-map.js";
 import type { MusicLane, SceneEngine } from "../scenes.js";
 
 // Lime, orchid, banana, lagoon and toucan orange, left to right.
@@ -23,14 +26,13 @@ const RAIL = 0.18;
 // The highway runs from just in front of the strike line far into the mist.
 const NEAR = 2.5;
 const LENGTH = 44;
-/** World units a note travels per second at motion 1. */
-const SPEED = 9;
+/** World units per source-file second; visual motion settings never change hit timing. */
+const SPEED = 14; // Hard highway: shorter reading window, independent of dance amplitude.
 const MAX_NOTES = 480;
 const MAX_FRETS = 96;
 const PARTICLES = 900;
 const FIREFLIES = 150;
 const EYE_PAIRS = 9;
-const STREAKS = [50, 100, 250, 500, 1000];
 const WAVES = 48;
 /** How long a struck gem is drawn squashing into its fret button. */
 const ABSORB = 0.08;
@@ -555,6 +557,7 @@ type Source = { key: string; chart: Chart; time: number; label: string };
  * its lane and lands on the strike line exactly as the beat it stands for plays.
  */
 export async function createJungleHero(host: HTMLCanvasElement): Promise<SceneEngine> {
+  let dance: MusicDance = STILL_DANCE;
   const renderer = new THREE.WebGLRenderer({
     antialias: true,
     powerPreference: "high-performance",
@@ -567,6 +570,8 @@ export async function createJungleHero(host: HTMLCanvasElement): Promise<SceneEn
 
   const disposables: { dispose(): void }[] = [];
   const keep = <T extends { dispose(): void }>(item: T) => (disposables.push(item), item);
+  const haunted = createHauntedKit(keep);
+  const pumpkinLantern = pumpkinLanternKit(keep);
   const camera = new THREE.PerspectiveCamera(50, 16 / 9, 0.1, 400);
   const base = new THREE.PerspectiveCamera(50, 16 / 9, 0.1, 400);
   // Three passes: the jungle behind, the highway, then leaves in front of everything.
@@ -576,8 +581,8 @@ export async function createJungleHero(host: HTMLCanvasElement): Promise<SceneEn
   const mist = new THREE.Color(0x06201a);
   scene.fog = new THREE.Fog(mist, 26, 50);
 
-  scene.add(new THREE.HemisphereLight(0xb8ffd8, 0x1a0c02, 1.1));
-  const sun = new THREE.DirectionalLight(0xfff2d0, 1.6);
+  scene.add(new THREE.HemisphereLight(0xbba0ff, 0x271004, 1.1));
+  const sun = new THREE.DirectionalLight(0xa6b9ff, 1.6);
   sun.position.set(2, 8, 5);
   scene.add(sun);
 
@@ -620,7 +625,7 @@ export async function createJungleHero(host: HTMLCanvasElement): Promise<SceneEn
             uv.x += (sin(uv.y * 9. + time * .9) * .0025 + sin(uv.y * 23. + time * 1.7) * .001) * sway * reach;
             uv.y += sin(uv.x * 7. + time * .7) * .0018 * sway;
             vec4 t = texture2D(map, uv);
-            vec3 color = t.rgb * light + glowColor * glow * pow(1. - vUv.y, 2.5) * t.a;
+            vec3 color = t.rgb * vec3(1.12, .68, 1.08) * light + glowColor * glow * pow(1. - vUv.y, 2.5) * t.a;
             gl_FragColor = vec4(color, t.a);
           }`,
       }),
@@ -736,24 +741,26 @@ export async function createJungleHero(host: HTMLCanvasElement): Promise<SceneEn
           float x = (vUv.x - .5) * ${(HIGHWAY_WIDTH + RAIL * 2).toFixed(3)};
           float d = vUv.y * ${LENGTH.toFixed(1)};
           float q = d - ${NEAR.toFixed(1)} + scroll;
-          // Leopard rosettes on dark wood, scrolling with the song.
+          // Engraved obsidian keeps the colourful notes legible against a quiet surface.
           float c = cell(vec2(x, q) * 1.15);
-          float ring = smoothstep(.2, .27, c) * (1. - smoothstep(.36, .46, c));
-          vec3 color = vec3(.07, .045, .02) + vec3(.06, .04, .012) * (1. - c);
-          color *= 1. - ring * .75;
+          float crack = smoothstep(.035, 0., c);
+          float grain = .5 + .5 * sin(x * 94. + sin(q * 29.));
+          vec3 color = vec3(.026, .018, .035) + vec3(.014, .01, .018) * grain;
+          color *= 1. - crack * .55;
           float lanef = x / ${LANE_WIDTH.toFixed(3)} + ${(NOTE_LANES / 2).toFixed(1)};
           int lane = int(clamp(floor(lanef), 0., ${(NOTE_LANES - 1).toFixed(1)}));
           float lx = fract(lanef);
           float near = 1. - vUv.y;
           float hit = hits[lane];
-          color += colors[lane] * (.05 + hit * .35 * pow(near, 3.)) * (1. - abs(lx - .5) * 1.3);
+          color += colors[lane] * (.025 + hit * .25 * pow(near, 3.)) * (1. - abs(lx - .5) * 1.3);
           float divider = smoothstep(.035, 0., min(lx, 1. - lx)) * step(abs(x), ${(HIGHWAY_WIDTH / 2).toFixed(3)});
-          color += vec3(.45, 1., .55) * divider * (.25 + pulse * .25);
-          // Gold rails that turn electric during a drop.
+          color += colors[lane] * divider * (.22 + pulse * .12);
+          // Copper rails and inset brass studs keep their material colour through a drop.
           float rail = smoothstep(${(RAIL * 0.9).toFixed(3)}, ${(RAIL * 0.3).toFixed(3)}, ${(HIGHWAY_WIDTH / 2 + RAIL).toFixed(3)} - abs(x));
-          vec3 railColor = mix(vec3(1., .72, .25), vec3(.45, .8, .45) + .35 * sin(vec3(0., 2., 4.) + q * .4 - time * 5.), fever);
-          color = mix(color, railColor * (.75 + pulse * .45), rail);
-          color += vec3(.1, .6, .25) * fever * .08 * (.5 + .5 * sin(q * .9 - time * 7.));
+          float stud = pow(.5 + .5 * cos(q * 5.2), 28.);
+          vec3 railColor = vec3(.62, .29, .075) + vec3(.28, .2, .09) * stud;
+          color = mix(color, railColor * (.7 + pulse * .2 + fever * .12), rail);
+          color += colors[lane] * fever * .035 * pow(near, 2.);
           float fade = 1. - smoothstep(.68, 1., vUv.y);
           gl_FragColor = vec4(color, fade);
         }`,
@@ -765,6 +772,38 @@ export async function createJungleHero(host: HTMLCanvasElement): Promise<SceneEn
   highway.position.z = NEAR - LENGTH / 2;
   highway.renderOrder = -1;
   scene.add(highway);
+  // Weathered ritual pillars frame the note highway without covering the lanes.
+  const ritualProps = new THREE.Group();
+  const dancingSeals: THREE.Mesh[] = [];
+  scene.add(ritualProps);
+  const pillarGeometry = keep(new THREE.CylinderGeometry(0.38, 0.55, 2.8, 8));
+  const plinthGeometry = keep(new THREE.BoxGeometry(1.15, 0.22, 1.15));
+  for (let i = 0; i < 5; i++)
+    for (const side of [-1, 1]) {
+      const x = side * (HIGHWAY_WIDTH / 2 + 1.1),
+        z = -i * 7 - 2;
+      const pillar = new THREE.Mesh(pillarGeometry, haunted.stone);
+      pillar.position.set(x, 0.65, z);
+      ritualProps.add(pillar);
+      const cap = new THREE.Mesh(plinthGeometry, haunted.iron);
+      cap.position.set(x, 2.12, z);
+      ritualProps.add(cap);
+      const lantern = pumpkinLantern();
+      lantern.position.set(x, 2.65, z);
+      lantern.scale.setScalar(1.25);
+      ritualProps.add(lantern);
+      const seal = haunted.seal();
+      seal.position.set(x, 0.8, z + 0.56);
+      seal.scale.setScalar(0.38);
+      ritualProps.add(seal);
+      dancingSeals.push(seal);
+    }
+  for (const mesh of instanceStaticProps(ritualProps)) keep(mesh);
+  const ritual = haunted.seal();
+  ritual.rotation.x = -Math.PI / 2;
+  ritual.position.set(0, -0.035, -4);
+  ritual.scale.setScalar(HIGHWAY_WIDTH * 0.8);
+  scene.add(ritual);
 
   const strike = new THREE.Mesh(
     keep(new THREE.BoxGeometry(HIGHWAY_WIDTH + RAIL * 2, 0.04, 0.08)),
@@ -946,44 +985,20 @@ export async function createJungleHero(host: HTMLCanvasElement): Promise<SceneEn
   hud.style.cssText =
     "position:absolute;inset:0;pointer-events:none;z-index:5;container-type:size;font-family:'Arial Black',Impact,system-ui,sans-serif;color:#fff";
   hud.innerHTML = `<style>
-    .jh-score{position:absolute;left:3cqw;bottom:6cqh;font-size:5.2cqh;letter-spacing:.04em;color:#ffe9a8;
-      -webkit-text-stroke:.35cqh #2a1400;paint-order:stroke fill;text-shadow:0 0 2cqh rgba(255,190,60,.55)}
-    .jh-mult{position:absolute;left:3cqw;bottom:13cqh;width:9cqh;height:9cqh;border-radius:50%;display:grid;place-items:center;
-      font-size:4cqh;background:radial-gradient(#1b3a12,#071406);border:.6cqh solid #7dff3a;box-shadow:0 0 2.5cqh #7dff3a}
-    .jh-streak{position:absolute;right:3cqw;bottom:6cqh;font-size:3cqh;text-align:right;color:#bfffd0;
-      -webkit-text-stroke:.25cqh #021a0a;paint-order:stroke fill}
-    .jh-streak b{display:block;font-size:5.2cqh;color:#fff}
-    .jh-meter{position:absolute;right:3.4cqw;top:22cqh;width:2.2cqh;height:46cqh;border-radius:2cqh;
-      background:linear-gradient(#7dff3a,#ffd23a 55%,#ff3a3a);box-shadow:0 0 0 .4cqh #1a0d02,0 0 2cqh rgba(125,255,58,.4);opacity:.9}
-    .jh-needle{position:absolute;left:-1.2cqh;right:-1.2cqh;height:1cqh;border-radius:1cqh;background:#fff;box-shadow:0 0 1.5cqh #fff;transition:top .25s}
-    .jh-label{position:absolute;right:2.2cqw;top:16cqh;font-size:2cqh;color:#d8ffb0;letter-spacing:.12em}
-    .jh-banner{position:absolute;left:0;right:0;top:12cqh;text-align:center;font-size:8cqh;color:#fff;opacity:0;
-      -webkit-text-stroke:.45cqh #062a0a;paint-order:stroke fill;text-shadow:0 0 3cqh #7dff3a}
+    .jh-score{position:absolute;left:3cqw;bottom:4cqh;font-size:2.6cqh;letter-spacing:.06em;color:#e7d0ab;text-shadow:0 1px 4px #000}
+    .jh-mult{position:absolute;left:3cqw;bottom:8cqh;font-size:1.8cqh;color:#a4d3bd;letter-spacing:.1em}
+    .jh-meter{position:absolute;right:3.4cqw;top:12cqh;width:.55cqh;height:22cqh;border-radius:1cqh;
+      background:linear-gradient(#86c9aa,#c9a766 55%,#8a483e);opacity:.65}
+    .jh-needle{position:absolute;left:-.4cqh;right:-.4cqh;height:.35cqh;background:#f3dfbc;transition:top .25s}
+    .jh-label{position:absolute;right:3.4cqw;top:6cqh;font-size:1.35cqh;color:#c5b99c;letter-spacing:.16em}
   </style>
   <div class="jh-mult">×1</div><div class="jh-score">0</div>
-  <div class="jh-streak">STREAK<b>0</b></div>
-  <div class="jh-label">JUNGLE</div><div class="jh-meter"><div class="jh-needle"></div></div>
-  <div class="jh-banner"></div>`;
+  <div class="jh-label">HAUNTED · HARD</div><div class="jh-meter"><div class="jh-needle"></div></div>`;
   renderer.domElement.after(hud);
   const $ = (selector: string) => hud.querySelector<HTMLElement>(selector)!;
   const scoreEl = $(".jh-score"),
     multEl = $(".jh-mult"),
-    streakEl = $(".jh-streak b"),
-    needle = $(".jh-needle"),
-    banner = $(".jh-banner");
-  const shout = (text: string, color = "#7dff3a") => {
-    banner.textContent = text;
-    banner.style.textShadow = `0 0 3cqh ${color}`;
-    banner.animate(
-      [
-        { opacity: 0, transform: "scale(.6)" },
-        { opacity: 1, transform: "scale(1.08)", offset: 0.15 },
-        { opacity: 1, transform: "scale(1)", offset: 0.7 },
-        { opacity: 0, transform: "scale(1.15)" },
-      ],
-      { duration: 1600, easing: "ease-out" },
-    );
-  };
+    needle = $(".jh-needle");
 
   // --- State ---
   const reduced = matchMedia("(prefers-reduced-motion: reduce)");
@@ -991,6 +1006,11 @@ export async function createJungleHero(host: HTMLCanvasElement): Promise<SceneEn
   const look = { ...target };
   let lanes: MusicLane[] = [];
   let idle: Chart | undefined;
+  const pending: Chart = {
+    song: { duration: 0, bars: [], energy: [], sections: [], swirls: [] },
+    notes: [],
+    frets: [],
+  };
   let idleClock = 0;
   let width = 0,
     height = 0,
@@ -998,8 +1018,8 @@ export async function createJungleHero(host: HTMLCanvasElement): Promise<SceneEn
   let previous: number | undefined;
   let sceneTime = 0;
   let sourceKey = "",
-    lastSongTime = 0,
-    lastStyle: Style | undefined;
+    lastSongTime = 0;
+  let lastChart: Chart | undefined;
   let score = 0,
     streak = 0,
     meter = 0.5,
@@ -1008,7 +1028,6 @@ export async function createJungleHero(host: HTMLCanvasElement): Promise<SceneEn
     bump = 0,
     lastFret = -1;
   let shownScore = -1,
-    shownStreak = -1,
     shownMult = -1;
   let statusText = "";
   const dummy = new THREE.Object3D();
@@ -1019,7 +1038,7 @@ export async function createJungleHero(host: HTMLCanvasElement): Promise<SceneEn
 
   const chartOf = (lane: MusicLane): Chart | undefined =>
     lane.trackId && lane.waveform?.peaks.length
-      ? chartFor(lane.trackId, lane.waveform, lane.bpm, lane.rhythm)
+      ? chartFor(lane.trackId, lane.waveform, lane.sourceBpm ?? lane.bpm, lane.rhythm)
       : undefined;
 
   /** Follow the loudest playing deck; a loaded but paused deck still shows its chart. */
@@ -1027,18 +1046,18 @@ export async function createJungleHero(host: HTMLCanvasElement): Promise<SceneEn
     let best: MusicLane | undefined,
       bestIndex = -1;
     lanes.forEach((lane, i) => {
-      if (!lane.waveform?.peaks.length || !lane.trackId) return;
+      if (!lane.trackId) return;
       const rank = (lane.playing ? 10 : 0) + lane.level;
       const bestRank = best ? (best.playing ? 10 : 0) + best.level : -1;
       if (rank > bestRank) ((best = lane), (bestIndex = i));
     });
     const chart = best && chartOf(best);
-    if (best && chart)
+    if (best)
       return {
         key: `${bestIndex}:${best.trackId}`,
-        chart,
+        chart: chart ?? pending,
         time: best.time,
-        label: `Deck ${bestIndex + 1}`,
+        label: `Deck ${bestIndex + 1}${chart ? "" : " · Waiting for track analysis"}`,
       };
     idle ??= buildChart(idleWaveform(), 124);
     idleClock += dt;
@@ -1097,7 +1116,6 @@ export async function createJungleHero(host: HTMLCanvasElement): Promise<SceneEn
     streak++;
     const multiplier = Math.min(4, 1 + Math.floor(streak / 10));
     score += (note.big ? 100 : 50) * multiplier * (fever > 0.5 ? 2 : 1);
-    if (STREAKS.includes(streak)) shout(`${streak} NOTE STREAK!`, "#ffd23a");
   };
 
   const resize = () => {
@@ -1156,6 +1174,9 @@ export async function createJungleHero(host: HTMLCanvasElement): Promise<SceneEn
   };
 
   return {
+    setDance(next) {
+      dance = next;
+    },
     setLook(next) {
       target = next;
     },
@@ -1173,38 +1194,44 @@ export async function createJungleHero(host: HTMLCanvasElement): Promise<SceneEn
       for (const key of ["intensity", "motion", "density", "halloween"] as const)
         look[key] += (target[key] - look[key]) * blend;
       const calm = reduced.matches ? 0.15 : 1;
+      const danceAmount = reduced.matches ? 0 : Math.max(0, look.motion);
+      // The seal moves beneath the chart; note timing and lane coordinates stay authoritative.
+      ritual.rotation.z = dance.twist * danceAmount * 0.16;
+      dancingSeals.forEach((seal, i) => {
+        seal.rotation.z = dance.sway * danceAmount * (i % 2 ? -0.2 : 0.2);
+        seal.scale.setScalar(0.38 * (1 + dance.kick * danceAmount * 0.12));
+      });
+      ritual.scale.setScalar(HIGHWAY_WIDTH * 0.8 * (1 + dance.bounce * danceAmount * 0.035));
       sceneTime += dt;
       const intensity = look.intensity;
 
       const source = pickSource(dt);
       const { chart } = source;
       const now = source.time;
-      const speed = SPEED * THREE.MathUtils.clamp(0.55 + 0.45 * look.motion, 0.4, 1.5);
+      const speed = SPEED;
       const ahead = (LENGTH - NEAR) / speed;
-      // The chart is already paced for play; the density slider only thins it below full.
-      const cutoff = THREE.MathUtils.clamp(1 - look.density, 0, 0.9);
-      const visible = (note: Note) => note.big || note.rank >= cutoff;
+      // Hard chart notes are never thinned by the decorative density setting.
 
       // Score every note that crossed the strike line since the last frame; a seek or a
       // track change just moves the playhead.
-      const jumped = source.key !== sourceKey || now < lastSongTime || now - lastSongTime > 0.5;
+      const jumped =
+        source.key !== sourceKey ||
+        chart !== lastChart ||
+        now < lastSongTime ||
+        now - lastSongTime > 0.5;
       if (!jumped) {
         for (let i = lowerBound(chart.notes, lastSongTime); i < chart.notes.length; i++) {
           const note = chart.notes[i]!;
           if (note.time > now) break;
-          if (note.time > lastSongTime && visible(note)) hit(note);
+          if (note.time > lastSongTime) hit(note);
         }
       } else if (source.key !== sourceKey) streak = 0;
       sourceKey = source.key;
+      lastChart = chart;
       lastSongTime = now;
 
       const section = sectionAt(chart.song, now);
       const style = section?.style ?? "groove";
-      if (style !== lastStyle && !jumped) {
-        if (style === "drop") shout("JUNGLE FEVER!", "#7dff3a");
-        else if (style === "build") shout("BUILD UP", "#ffd23a");
-      }
-      lastStyle = style;
       fever += ((style === "drop" ? 1 : 0) - fever) * (1 - Math.exp(-dt * 3));
       let bar = 0;
       while (bar < chart.song.bars.length - 1 && chart.song.bars[bar + 1]! <= now) bar++;
@@ -1222,7 +1249,7 @@ export async function createJungleHero(host: HTMLCanvasElement): Promise<SceneEn
       for (; holdIndex < chart.notes.length; holdIndex++) {
         const note = chart.notes[holdIndex]!;
         if (note.time > now) break;
-        if (note.length && note.time + note.length > now && visible(note)) {
+        if (note.length && note.time + note.length > now) {
           hits[note.lane] = Math.max(hits[note.lane]!, 0.7);
           holding[note.lane] = 1;
           if (Math.random() < dt * 30) spawn(laneX(note.lane), laneColors[note.lane]!, 1, 0.6);
@@ -1240,7 +1267,6 @@ export async function createJungleHero(host: HTMLCanvasElement): Promise<SceneEn
       ) {
         const note = chart.notes[i]!;
         if (note.time > now + ahead) break;
-        if (!visible(note)) continue;
         const z = -(note.time - now) * speed;
         const x = laneX(note.lane);
         const laneColor = laneColors[note.lane]!;
@@ -1249,11 +1275,7 @@ export async function createJungleHero(host: HTMLCanvasElement): Promise<SceneEn
           const zStart = Math.min(0, z);
           const span = Math.max(0.01, zStart - Math.max(zEnd, -(LENGTH - NEAR)));
           const held = note.time <= now;
-          dummy.position.set(
-            x,
-            0.06,
-            zStart - span / 2,
-          );
+          dummy.position.set(x, 0.06, zStart - span / 2);
           dummy.rotation.set(0, 0, 0);
           dummy.scale.set(held ? 0.24 : 0.17, 0.05, span);
           dummy.updateMatrix();
@@ -1266,7 +1288,8 @@ export async function createJungleHero(host: HTMLCanvasElement): Promise<SceneEn
         const bob = note.big && !struck ? 0.06 + Math.sin(sceneTime * 6 + note.time) * 0.04 : 0;
         dummy.rotation.set(0, 0, 0);
         dummy.scale.setScalar(note.big ? 1.18 : 1);
-        if (struck > 0) dummy.scale.set(1 + struck * 0.5, Math.max(0.05, 1 - struck), 1 + struck * 0.5);
+        if (struck > 0)
+          dummy.scale.set(1 + struck * 0.5, Math.max(0.05, 1 - struck), 1 + struck * 0.5);
         dummy.position.set(x, 0.05 + bob, Math.min(0, z));
         dummy.updateMatrix();
         gemBase.setMatrixAt(gems, dummy.matrix);
@@ -1318,7 +1341,7 @@ export async function createJungleHero(host: HTMLCanvasElement): Promise<SceneEn
         if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
       }
 
-      // A downbeat nudges the camera and the jungle.
+      // Downbeats accent the set while the note-reading camera stays fixed.
       const fretIndex = lowerBound(chart.frets, now + 0.0001) - 1;
       if (fretIndex !== lastFret && fretIndex >= 0 && !jumped && chart.frets[fretIndex]?.downbeat)
         bump = 1;
@@ -1330,7 +1353,7 @@ export async function createJungleHero(host: HTMLCanvasElement): Promise<SceneEn
       targets.forEach((t, lane) => {
         hits[lane] = hits[lane]! * Math.exp(-dt * 7);
         const h = hits[lane]!;
-        t.ring.scale.setScalar(1 + h * 0.25);
+        t.ring.scale.setScalar(1 + h * 0.25 + dance.kick * danceAmount * 0.09);
         (t.ring.material as THREE.MeshBasicMaterial).color
           .copy(t.color)
           .multiplyScalar(1 + h * 0.8);
@@ -1340,7 +1363,9 @@ export async function createJungleHero(host: HTMLCanvasElement): Promise<SceneEn
         t.beamMaterial.uniforms.strength!.value = h * intensity;
         press[lane] = press[lane]! * Math.exp(-dt * 16);
         const p = Math.max(press[lane]!, holding[lane]! ? 0.75 : 0);
-        t.button.position.y = BUTTON_Y - p * 0.085;
+        t.button.position.y = BUTTON_Y - p * 0.085 + dance.bounce * danceAmount * 0.045;
+        t.button.rotation.z = dance.sway * danceAmount * (lane % 2 ? -0.07 : 0.07);
+        t.button.rotation.x = dance.nod * danceAmount * 0.06;
         t.button.scale.set(1 + p * 0.1, 1 - p * 0.35, 1 + p * 0.1);
         (t.button.material as THREE.MeshStandardMaterial).emissiveIntensity = 0.15 + p * 1.8;
       });
@@ -1357,7 +1382,9 @@ export async function createJungleHero(host: HTMLCanvasElement): Promise<SceneEn
         waves.setMatrixAt(waveCount, dummy.matrix);
         waves.setColorAt(
           waveCount++,
-          color.copy(laneColors[waveLane[i]!]!).multiplyScalar(Math.pow(1 - clamp01(k), 2) * (waveBig[i] ? 3 : 2)),
+          color
+            .copy(laneColors[waveLane[i]!]!)
+            .multiplyScalar(Math.pow(1 - clamp01(k), 2) * (waveBig[i] ? 3 : 2)),
         );
       }
       waves.count = waveCount;
@@ -1455,18 +1482,16 @@ export async function createJungleHero(host: HTMLCanvasElement): Promise<SceneEn
       // --- Overlay ---
       const multiplier = Math.min(4, 1 + Math.floor(streak / 10));
       if (score !== shownScore) scoreEl.textContent = (shownScore = score).toLocaleString("en-US");
-      if (streak !== shownStreak) streakEl.textContent = String((shownStreak = streak));
       if (multiplier !== shownMult) {
         shownMult = multiplier;
         multEl.textContent = `×${multiplier}`;
         const ring = MULTIPLIER_COLORS[multiplier - 1]!;
-        multEl.style.borderColor = ring;
-        multEl.style.boxShadow = `0 0 2.5cqh ${ring}`;
+        multEl.style.color = ring;
       }
       needle.style.top = `${(1 - Math.min(1, meter)) * 100}%`;
       hud.style.opacity = String(Math.min(1, intensity * 1.5));
 
-      statusText = `${source.label} · ${style} · ${gems} notes ahead · ×${multiplier}`;
+      statusText = `${source.label} · HARD · ${style} · ${gems} notes ahead · ×${multiplier}`;
       composer.render(dt);
     },
     dispose() {

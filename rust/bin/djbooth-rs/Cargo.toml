@@ -23,6 +23,3 @@ sha2 = "0.10"
 tokio.workspace = true
 tokio-stream.workspace = true
 tracing.workspace = true
-
-[dev-dependencies]
-tempfile.workspace = true

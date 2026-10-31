@@ -1440,6 +1440,7 @@ export const resolveCli = Cli.create("resolve", {
         )?.manifest;
       }
       if (hostedManifest) {
+        retainResolvedRecordings(await stateStore.load(), hostedManifest);
         hostedManifest.artifacts.root = stateStore.artifactDirectory;
         hostedManifest.artifacts.downloadDirectory = resolve(outputDirectory);
         delete hostedManifest.artifacts.manifest;

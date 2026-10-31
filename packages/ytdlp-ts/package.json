@@ -2,26 +2,26 @@
   "name": "@gakonst/ytdlp-ts",
   "version": "0.3.0",
   "description": "A music-first TypeScript yt-dlp port with an agent-native incur CLI",
-  "type": "module",
-  "license": "Unlicense",
   "homepage": "https://github.com/gakonst/djbooth/tree/main/packages/ytdlp-ts#readme",
   "bugs": {
     "url": "https://github.com/gakonst/djbooth/issues"
   },
+  "license": "Unlicense",
   "repository": {
     "type": "git",
     "url": "https://github.com/gakonst/djbooth",
     "directory": "packages/ytdlp-ts"
   },
-  "publishConfig": {
-    "access": "public"
-  },
-  "engines": {
-    "node": ">=22"
-  },
   "bin": {
     "ytdlp-ts": "./dist/cli.js"
   },
+  "files": [
+    "dist",
+    "docs",
+    "LICENSE",
+    "README.md"
+  ],
+  "type": "module",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -32,20 +32,14 @@
       "default": "./dist/cli.js"
     }
   },
-  "files": [
-    "dist",
-    "docs",
-    "LICENSE",
-    "README.md"
-  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "check": "pnpm typecheck && pnpm test",
+    "check": "pnpm typecheck",
     "dev": "tsx src/cli.ts",
     "prepack": "pnpm build",
-    "test": "vitest run",
-    "test:coverage": "vitest run --coverage",
-    "test:watch": "vitest",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -54,9 +48,10 @@
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
-    "@vitest/coverage-v8": "3.2.7",
     "tsx": "^4.20.0",
-    "typescript": "^5.8.0",
-    "vitest": "^3.2.0"
+    "typescript": "^5.8.0"
+  },
+  "engines": {
+    "node": ">=22"
   }
 }

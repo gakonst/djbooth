@@ -1,10 +1,11 @@
 // Ported from apps/dj-monitor/src/BoothVisuals.tsx: the booth's built-in line visual,
-// which there is the fallback when no 3D scene is selected. Shaders are copied verbatim.
-import type { SceneEngine } from "../scenes.js";
+// with etched spectral ribbons, pumpkin meridians and cobweb portals.
+import type { MusicLane, SceneEngine } from "../scenes.js";
+import { createWaveformPulse } from "../music/waveform-pulse.js";
 
 const vertex = `
 attribute vec3 seed;
-uniform float time,aspect,pixelRatio,activity;
+uniform float time,aspect,pixelRatio,activity,dance,palette;
 uniform vec4 energy[3],motion[3];
 uniform vec2 origins[3];
 uniform sampler2D waveforms;
@@ -13,7 +14,8 @@ varying float opacity;
 vec3 orbit(float t,float shape){
  vec3 knot=vec3(sin(t)+.32*sin(3.*t),.65*sin(2.*t),.4*cos(3.*t));
  vec3 loop=vec3(cos(t)*(1.+.2*cos(3.*t)),sin(t)*.75,.42*sin(2.*t));
- return mix(knot,loop,shape);
+ vec3 vine=vec3(cos(t)*(1.+.12*cos(t*7.)),sin(t)*.8,.3*sin(t*3.));
+ return mix(mix(knot,loop,shape),vine,.45);
 }
 void main(){
  int lane=int(seed.z); vec4 e=energy[0];vec4 m=motion[0];vec2 origin=origins[0];vec3 color=vec3(.12,.86,1.);
@@ -24,8 +26,12 @@ void main(){
  float v=fract(seed.y*3.);
  vec4 signal=texture2D(waveforms,vec2(u,(seed.z+.5)/3.));
  float amplitude=signal.a;
- color=signal.rgb;
- float beatPulse=exp(-fract(m.w)*7.);
+ vec3 amber=vec3(.9,.37,.07), ectoplasm=vec3(.29,.68,.47), violet=vec3(.51,.28,.75);
+ color=mix(amber,violet,.5+.5*sin(u*6.283+palette*.15));
+ if(lane==1)color=mix(amber,vec3(.85,.65,.27),u);
+ if(lane==2)color=mix(ectoplasm,violet,.5+.5*sin(u*12.56));
+ color=mix(color,signal.rgb,.12);
+ float beatPulse=exp(-fract(m.w)*10.)*min(1.,sqrt(max(0.,e.x))*4.);
  float travelingPulse=exp(-fract(m.w-u*8.)*9.);
  float phase=time*.055+seed.z*2.094;
  float spread=sqrt(aspect);
@@ -40,59 +46,58 @@ void main(){
    vec3 curve=orbit(t,shape);
    vec3 tangent=normalize(orbit(t+.01,shape)-orbit(t-.01,shape));
    vec3 normal=normalize(cross(tangent,vec3(0.,0.,1.)));
-   float wave=(amplitude-.5)*(.2+e.y*.3)*(1.+m.y);
+   float wave=(amplitude-.5)*(.35+e.y*.9+dance*.5)*(1.+m.y);
    float enter=smoothstep(0.,.22,u);
    p=curve*enter;
-   p+=normal*(wave+shell*(.035+amplitude*.14)*(1.+travelingPulse*.7))*enter;
+   p+=normal*(wave+shell*(.035+amplitude*.2)*(1.+travelingPulse*1.6+dance*.8))*enter;
    p.z+=shell*.12*enter+m.x*sin(t)*.18;
    p.x*=spread;
    root=origin*(1.-enter);
    weight=(1.-smoothstep(.9,1.,u))*(.95-abs(shell)*.35);
  }else if(family<1.5){
    // Orderly contour sections of a slowly folding shared surface.
+   // Latitudinal engraving over a lobed pumpkin silhouette.
    float theta=u*6.283185;
-   float phi=floor(v*24.)/24.*6.283185+phase;
-   float fold=sin(theta*3.+phi*2.+time*.12+m.x)*(.07+e.z*.1)+(amplitude-.5)*.12;
-   float radius=.65+fold+(.18+e.y*.1)*cos(phi+theta*2.);
-   p=vec3(cos(theta+phase*.2)*radius*spread,
-          sin(theta+phase*.2)*radius,
-          (.18+amplitude*.08)*sin(phi+theta*2.));
-   p.z+=cos(theta*2.-phase)*.2+m.y*sin(theta*6.+phi)*.08;
-   float swivel=sin(time*.067+seed.z)*.6;
-   p.xy=mat2(cos(swivel),-sin(swivel),sin(swivel),cos(swivel))*p.xy;
-   p.x+=sin(time*.09+seed.z*2.094)*.25;
-   p.y+=cos(time*.07+seed.z*2.094)*.18;
-   weight=.25;
+   float phi=(floor(v*24.)+.5)/24.*3.14159;
+   float lobe=1.+.085*cos(theta*10.);
+   float radius=sin(phi)*lobe*(.86+amplitude*.09);
+   p=vec3(cos(theta)*radius*spread,cos(phi)*.82,sin(theta)*radius*.55);
+   float swivel=sin(time*.12+seed.z)*.24;
+   p.xz=mat2(cos(swivel),-sin(swivel),sin(swivel),cos(swivel))*p.xz;
+   p.y+=.08*cos(theta*2.)*sin(phi);
+   weight=.65;
  }else{
    // Nested square portals create a precise architectural vanishing point.
    // Fade at both ends of travel so recycling a portal never flashes.
    float travel=fract(floor(v*24.)/24.+time*.012);
-   float perimeter=u*4.;
-   vec2 q;
-   if(perimeter<1.)q=vec2(-1.+perimeter*2.,-1.);
-   else if(perimeter<2.)q=vec2(1.,-1.+(perimeter-1.)*2.);
-   else if(perimeter<3.)q=vec2(1.-(perimeter-2.)*2.,1.);
-   else q=vec2(-1.,1.-(perimeter-3.)*2.);
+   // Scalloped silk threads stretched between eight radial web supports.
+   float angle=u*6.283185;
+   float sector=fract(u*8.);
+   float scallop=1.-.16*sin(sector*3.14159);
+   vec2 q=vec2(cos(angle),sin(angle))*scallop;
    float scale=.25+travel*1.35;
-   float twist=sin(time*.045)*.3+travel*.6+seed.z*.035;
+   float twist=sin(time*.15)*.3+travel*.6+seed.z*.035+dance*sin(travel*6.283185)*.35;
    q=mat2(cos(twist),-sin(twist),sin(twist),cos(twist))*q;
    p=vec3(q*vec2(spread,1.)*scale,travel*.3);
    p.z+=(amplitude-.5)*.05;
    p.xy+=vec2(sin(time*.055),cos(time*.041))*(1.-travel)*.3;
-   weight=sin(travel*3.14159)*.16;
+   weight=sin(travel*3.14159)*.4;
  }
  // Each player owns a recognizable family even when WebGPU is unavailable:
  // CDJ 1 ribbons, CDJ 2 folding contours, CDJ 3 square wave portals.
  weight*=abs(family-float(lane))<.5 ? 1. : .08;
- p*=1.+beatPulse*(.045+amplitude*.12);
+ p*=1.+beatPulse*(.025+amplitude*.04)+dance*.04;
+ p.xy+=vec2(sin(u*18.+time*1.4),cos(u*14.-time))*.08*dance;
  float tilt=sin(time*.045)*.16;
  p.yz=mat2(cos(tilt),-sin(tilt),sin(tilt),cos(tilt))*p.yz;
  float perspective=1./(1.+p.z*.55);
  gl_Position=vec4(root+vec2(p.x/aspect,p.y)*perspective,0.,1.);
  float accent=(.88+travelingPulse*.12)*(family<.5 ? 1. : .35);
  vec3 tint=color/max(.004,max(color.r,max(color.g,color.b)));
- ink=mix(vec3(1.),tint,accent)*(.45+amplitude*.25+travelingPulse*.3);
- opacity=min(1.,sqrt(max(0.,e.x))*1.8)*weight*(.6+beatPulse*.4);
+ float patina=.72+.28*sin(u*260.+seed.y*70.);
+ ink=mix(vec3(.55,.41,.27),tint,.8)*(.32+amplitude*.25+travelingPulse*.2+dance*.3)*patina;
+ ink*=.75+.25*perspective;
+ opacity=min(1.,sqrt(max(0.,e.x))*3.2)*weight*(.65+beatPulse*.35+dance*.5);
  opacity+=activity*.008;
 
 }`;
@@ -106,6 +111,11 @@ const segments = 256;
 const verticesPerLane = contours * segments * 2;
 
 export function createLinesBooth(host: HTMLCanvasElement): SceneEngine {
+  const pulse = createWaveformPulse();
+  const reduced = matchMedia("(prefers-reduced-motion: reduce)");
+  let music: MusicLane[] = [];
+  let previousTime: number | undefined;
+  let clock = 0;
   const canvas = document.createElement("canvas");
   host.after(canvas);
   const gl = canvas.getContext("webgl", {
@@ -158,12 +168,22 @@ export function createLinesBooth(host: HTMLCanvasElement): SceneEngine {
     aspect: uniform("aspect"),
     pixelRatio: uniform("pixelRatio"),
     activity: uniform("activity"),
+    dance: uniform("dance"),
+    palette: uniform("palette"),
     energy: uniform("energy[0]"),
     motion: uniform("motion[0]"),
     origins: uniform("origins[0]"),
   };
   return {
+    setMusic(lanes) {
+      music = lanes;
+    },
     draw(time, rgba, energy, motion, origins) {
+      const response = pulse.update(music, previousTime === undefined ? 0 : time - previousTime);
+      clock +=
+        (previousTime === undefined ? 0 : Math.min(0.05, Math.max(0, time - previousTime))) *
+        (reduced.matches ? 0 : 1);
+      previousTime = time;
       const ratio = Math.min(devicePixelRatio, 1.5);
       const w = Math.round(innerWidth * ratio),
         h = Math.round(innerHeight * ratio);
@@ -173,10 +193,12 @@ export function createLinesBooth(host: HTMLCanvasElement): SceneEngine {
         gl.viewport(0, 0, w, h);
       }
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 256, 3, 0, gl.RGBA, gl.UNSIGNED_BYTE, rgba);
-      gl.clearColor(0, 0, 0, 1);
+      gl.clearColor(0.018, 0.01, 0.028, 1);
       gl.clear(gl.COLOR_BUFFER_BIT);
-      gl.uniform1f(uniforms.time, time);
+      gl.uniform1f(uniforms.time, clock);
       gl.uniform1f(uniforms.activity, 0);
+      gl.uniform1f(uniforms.dance, response.pulse * (reduced.matches ? 0.15 : 1));
+      gl.uniform1f(uniforms.palette, reduced.matches ? 0 : (response.hue * Math.PI) / 180);
       gl.uniform1f(uniforms.aspect, w / h);
       gl.uniform1f(uniforms.pixelRatio, ratio);
       gl.uniform4fv(uniforms.energy, energy);

@@ -115,6 +115,3 @@ rand_distr = "0.5"
 vergen-gitcl = { version = "1.0", default-features = false, features = [
     "build",
 ] }
-
-[dev-dependencies]
-tokio = { version = "1", features = ["macros"] }

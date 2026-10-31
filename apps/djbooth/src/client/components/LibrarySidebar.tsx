@@ -38,6 +38,8 @@ type Props = {
   loading: boolean;
   open: boolean;
   canWrite: boolean;
+  canDropTracks?: boolean;
+  onDropTracks?(playlist: PlaylistItem, trackIds: string[]): void;
   hosted?: HostedPlaylistsResponse;
   hostedLoading?: boolean;
   selectedHostedPlaylistId?: string | null;
@@ -74,6 +76,8 @@ export function LibrarySidebar({
   loading,
   open,
   canWrite,
+  canDropTracks = canWrite,
+  onDropTracks,
   hosted,
   hostedLoading = false,
   selectedHostedPlaylistId = null,
@@ -276,6 +280,8 @@ export function LibrarySidebar({
                     onSelectPlaylist(id);
                     onClose();
                   }}
+                  canDropTracks={canDropTracks}
+                  onDropTracks={onDropTracks}
                   onContextMenu={onPlaylistContextMenu}
                   onEdit={(playlist) => onEditPlaylist?.(playlist)}
                 />
@@ -326,7 +332,11 @@ function PlaylistTreeNode({
   onSelect,
   onContextMenu,
   onEdit,
+  canDropTracks,
+  onDropTracks,
 }: {
+  canDropTracks?: boolean;
+  onDropTracks?(playlist: PlaylistItem, trackIds: string[]): void;
   node: PlaylistNode;
   depth: number;
   query: string;
@@ -342,6 +352,10 @@ function PlaylistTreeNode({
   ): void;
   onEdit(playlist: PlaylistItem): void;
 }) {
+  const [dropActive, setDropActive] = useState(false);
+  const acceptsTracks = Boolean(
+    canDropTracks && onDropTracks && node.type === "playlist" && !node.hosted && !node.usb,
+  );
   const isFolder = node.type === "folder";
   const descendantsMatch = nodeMatches(node, query);
   if (query && !descendantsMatch) return null;
@@ -362,8 +376,51 @@ function PlaylistTreeNode({
       aria-expanded={isFolder ? isExpanded : undefined}
     >
       <div
-        className={`playlist-node-row ${active ? "is-active" : ""}`}
-        style={{ "--depth": depth } as React.CSSProperties}
+        className={`playlist-node-row ${active ? "is-active" : ""} ${dropActive ? "is-active" : ""}`}
+        title={dropActive ? `Append tracks to ${node.name}` : undefined}
+        onDragOver={(event) => {
+          if (
+            !acceptsTracks ||
+            !event.dataTransfer.types.includes("application/x-rekordbox-track-ids")
+          )
+            return;
+          event.preventDefault();
+          event.stopPropagation();
+          event.dataTransfer.dropEffect = "copy";
+          setDropActive(true);
+        }}
+        onDragLeave={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget as Node | null))
+            setDropActive(false);
+        }}
+        onDrop={(event) => {
+          setDropActive(false);
+          if (!acceptsTracks) return;
+          event.preventDefault();
+          event.stopPropagation();
+          try {
+            const ids: unknown = JSON.parse(
+              event.dataTransfer.getData("application/x-rekordbox-track-ids"),
+            );
+            if (
+              Array.isArray(ids) &&
+              ids.length &&
+              ids.every((id) => typeof id === "string" && id.length > 0)
+            ) {
+              onDropTracks?.(node, [...new Set(ids as string[])]);
+            }
+          } catch {
+            // Ignore malformed or unrelated external drag data.
+          }
+        }}
+        style={
+          {
+            "--depth": depth,
+            ...(dropActive
+              ? { outline: "2px solid var(--accent, #60a5fa)", outlineOffset: "-2px" }
+              : {}),
+          } as React.CSSProperties
+        }
       >
         {isFolder ? (
           <button
@@ -454,6 +511,8 @@ function PlaylistTreeNode({
               onToggle={onToggle}
               onSelect={onSelect}
               onContextMenu={onContextMenu}
+              canDropTracks={canDropTracks}
+              onDropTracks={onDropTracks}
               onEdit={onEdit}
             />
           ))}

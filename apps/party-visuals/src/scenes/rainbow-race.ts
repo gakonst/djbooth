@@ -1,3 +1,4 @@
+import type { MusicDance } from "../../../dj-monitor/src/music-dance.js";
 import * as THREE from "three";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
 import { COURSE_RATE, courseFrame, type Course } from "./rainbow-course.js";
@@ -5,7 +6,12 @@ import { COURSE_RATE, courseFrame, type Course } from "./rainbow-course.js";
 /** How far in front of the camera the player's kart drives. */
 export const KART_LEAD = 9;
 
-type Frame = { point: THREE.Vector3; tangent: THREE.Vector3; up: THREE.Vector3; right: THREE.Vector3 };
+type Frame = {
+  point: THREE.Vector3;
+  tangent: THREE.Vector3;
+  up: THREE.Vector3;
+  right: THREE.Vector3;
+};
 const newFrame = (): Frame => ({
   point: new THREE.Vector3(),
   tangent: new THREE.Vector3(),
@@ -33,6 +39,8 @@ type Driver = "cap" | "pumpkin" | "ghost" | "witch" | "skeleton" | "vampire" | "
 type Kart = {
   group: THREE.Group;
   body: THREE.Group;
+  driver: THREE.Group;
+  head: THREE.Group;
   wheels: THREE.Object3D[];
   flames: THREE.Sprite[];
   paint: THREE.MeshStandardMaterial;
@@ -109,13 +117,24 @@ type Parts = ReturnType<typeof kartParts>;
 /** A driver on top of the kart, from the waist up, in one of several Halloween costumes. */
 function createDriver(type: Driver, color: number, parts: Parts, own: THREE.Material[]) {
   const make = (c: number, roughness = 0.6, emissive = 0) => {
-    const m = new THREE.MeshStandardMaterial({ color: c, roughness, emissive, emissiveIntensity: emissive ? 1 : 0 });
+    const m = new THREE.MeshStandardMaterial({
+      color: c,
+      roughness,
+      emissive,
+      emissiveIntensity: emissive ? 1 : 0,
+    });
     own.push(m);
     return m;
   };
   const driver = new THREE.Group();
   driver.position.set(0, 0.9, 0.35);
-  const add = (geometry: THREE.BufferGeometry, m: THREE.Material, x: number, y: number, z: number) => {
+  const add = (
+    geometry: THREE.BufferGeometry,
+    m: THREE.Material,
+    x: number,
+    y: number,
+    z: number,
+  ) => {
     const mesh = new THREE.Mesh(geometry, m);
     mesh.position.set(x, y, z);
     driver.add(mesh);
@@ -133,7 +152,13 @@ function createDriver(type: Driver, color: number, parts: Parts, own: THREE.Mate
   const head = new THREE.Group();
   head.position.set(0, 1.02, 0);
   driver.add(head);
-  const part = (geometry: THREE.BufferGeometry, m: THREE.Material, x: number, y: number, z: number) => {
+  const part = (
+    geometry: THREE.BufferGeometry,
+    m: THREE.Material,
+    x: number,
+    y: number,
+    z: number,
+  ) => {
     const mesh = new THREE.Mesh(geometry, m);
     mesh.position.set(x, y, z);
     head.add(mesh);
@@ -144,8 +169,20 @@ function createDriver(type: Driver, color: number, parts: Parts, own: THREE.Mate
   };
   if (type === "cap") {
     part(new THREE.SphereGeometry(0.36, 20, 16), skin, 0, 0, 0);
-    part(new THREE.SphereGeometry(0.38, 20, 12, 0, Math.PI * 2, 0, Math.PI / 2), outfit, 0, 0.08, 0);
-    part(new THREE.CylinderGeometry(0.3, 0.32, 0.04, 20, 1, false, Math.PI / 2, Math.PI), outfit, 0, 0.1, -0.2);
+    part(
+      new THREE.SphereGeometry(0.38, 20, 12, 0, Math.PI * 2, 0, Math.PI / 2),
+      outfit,
+      0,
+      0.08,
+      0,
+    );
+    part(
+      new THREE.CylinderGeometry(0.3, 0.32, 0.04, 20, 1, false, Math.PI / 2, Math.PI),
+      outfit,
+      0,
+      0.1,
+      -0.2,
+    );
     part(new THREE.SphereGeometry(0.1, 10, 8), make(0xffb08a), 0, -0.04, -0.36);
     eyes(black, 0.08, -0.3, 0.045);
   } else if (type === "pumpkin") {
@@ -156,7 +193,13 @@ function createDriver(type: Driver, color: number, parts: Parts, own: THREE.Mate
     eyes(glow, 0.08, -0.38, 0.08);
     part(new THREE.BoxGeometry(0.34, 0.07, 0.05), glow, 0, -0.13, -0.38);
   } else if (type === "ghost") {
-    const sheet = part(new THREE.SphereGeometry(0.42, 20, 16), make(0xf4f2ff, 0.4, 0x302a50), 0, 0, 0);
+    const sheet = part(
+      new THREE.SphereGeometry(0.42, 20, 16),
+      make(0xf4f2ff, 0.4, 0x302a50),
+      0,
+      0,
+      0,
+    );
     sheet.scale.set(1, 1.15, 1);
     eyes(black, 0.08, -0.38, 0.08);
     part(new THREE.SphereGeometry(0.08, 10, 8), black, 0, -0.14, -0.38).scale.set(1, 1.4, 0.6);
@@ -167,7 +210,8 @@ function createDriver(type: Driver, color: number, parts: Parts, own: THREE.Mate
     hat.rotation.x = 0.25;
     part(new THREE.CylinderGeometry(0.33, 0.33, 0.08, 20), make(0x9b3cff), 0, 0.24, 0);
     eyes(make(0xffee55, 0.4, 0x886600), 0.04, -0.3, 0.05);
-    part(new THREE.ConeGeometry(0.06, 0.22, 8), make(0x7cc058), 0, -0.04, -0.4).rotation.x = -Math.PI / 2;
+    part(new THREE.ConeGeometry(0.06, 0.22, 8), make(0x7cc058), 0, -0.04, -0.4).rotation.x =
+      -Math.PI / 2;
   } else if (type === "skeleton") {
     part(new THREE.SphereGeometry(0.37, 20, 16), make(0xf2eedc, 0.5), 0, 0, 0);
     part(new THREE.BoxGeometry(0.4, 0.2, 0.3), make(0xf2eedc, 0.5), 0, -0.26, -0.08);
@@ -175,29 +219,65 @@ function createDriver(type: Driver, color: number, parts: Parts, own: THREE.Mate
     part(new THREE.ConeGeometry(0.05, 0.08, 3), black, 0, -0.08, -0.36).rotation.x = Math.PI;
   } else if (type === "vampire") {
     part(new THREE.SphereGeometry(0.35, 20, 16), make(0xdfe2f0), 0, 0, 0);
-    part(new THREE.SphereGeometry(0.37, 20, 12, 0, Math.PI * 2, 0, Math.PI / 2.2), black, 0, 0.06, 0.03);
-    const collar = part(new THREE.ConeGeometry(0.62, 0.6, 20, 1, true), make(0xb0102a), 0, -0.32, 0.12);
+    part(
+      new THREE.SphereGeometry(0.37, 20, 12, 0, Math.PI * 2, 0, Math.PI / 2.2),
+      black,
+      0,
+      0.06,
+      0.03,
+    );
+    const collar = part(
+      new THREE.ConeGeometry(0.62, 0.6, 20, 1, true),
+      make(0xb0102a),
+      0,
+      -0.32,
+      0.12,
+    );
     collar.rotation.x = Math.PI;
     eyes(make(0xff2030, 0.4, 0xaa0000), 0.03, -0.31, 0.05);
   } else if (type === "mummy") {
     const wrap = make(0xe8dcc0, 0.9);
     part(new THREE.SphereGeometry(0.36, 20, 16), wrap, 0, 0, 0);
     for (let k = -2; k <= 2; k++) {
-      const band = part(new THREE.TorusGeometry(0.36 - Math.abs(k) * 0.03, 0.03, 6, 24), make(0xcabb98, 0.9), 0, k * 0.12, 0);
+      const band = part(
+        new THREE.TorusGeometry(0.36 - Math.abs(k) * 0.03, 0.03, 6, 24),
+        make(0xcabb98, 0.9),
+        0,
+        k * 0.12,
+        0,
+      );
       band.rotation.set(Math.PI / 2 + k * 0.15, 0, k * 0.2);
     }
     eyes(make(0x66ff99, 0.4, 0x22aa55), 0.05, -0.32, 0.05);
   } else {
     part(new RoundedBoxGeometry(0.62, 0.7, 0.62, 3, 0.1), make(0x7ac070), 0, 0.05, 0);
     part(new THREE.BoxGeometry(0.66, 0.14, 0.66), black, 0, 0.42, 0);
-    for (const side of [-1, 1]) part(new THREE.CylinderGeometry(0.05, 0.05, 0.16, 8).rotateZ(Math.PI / 2), make(0x9a9aa8, 0.3, 0), side * 0.38, -0.12, 0);
+    for (const side of [-1, 1])
+      part(
+        new THREE.CylinderGeometry(0.05, 0.05, 0.16, 8).rotateZ(Math.PI / 2),
+        make(0x9a9aa8, 0.3, 0),
+        side * 0.38,
+        -0.12,
+        0,
+      );
     eyes(black, 0.08, -0.32, 0.05);
   }
-  return driver;
+  return { driver, head };
 }
 
-function createKart(parts: Parts, color: number, driver: Driver, flame: THREE.SpriteMaterial, own: THREE.Material[]): Kart {
-  const paint = new THREE.MeshStandardMaterial({ color, roughness: 0.35, metalness: 0.2, emissive: 0x000000 });
+function createKart(
+  parts: Parts,
+  color: number,
+  driver: Driver,
+  flame: THREE.SpriteMaterial,
+  own: THREE.Material[],
+): Kart {
+  const paint = new THREE.MeshStandardMaterial({
+    color,
+    roughness: 0.28,
+    metalness: 0.55,
+    emissive: 0x000000,
+  });
   own.push(paint);
   const group = new THREE.Group();
   const body = new THREE.Group();
@@ -233,19 +313,57 @@ function createKart(parts: Parts, color: number, driver: Driver, flame: THREE.Sp
     body.add(sprite);
     flames.push(sprite);
   }
-  body.add(createDriver(driver, color, parts, own));
-  return { group, body, wheels, flames, paint };
+  // Amber slit headlights and a sculpted batwing spoiler turn each racer into a night carriage.
+  const lamp = new THREE.MeshBasicMaterial({
+    color: new THREE.Color(0xffb550).multiplyScalar(2.2),
+  });
+  own.push(lamp);
+  for (const side of [-1, 1]) {
+    const housing = new THREE.Mesh(new THREE.BoxGeometry(0.39, 0.22, 0.2), parts.dark);
+    housing.position.set(side * 0.56, 0.65, -1.4);
+    body.add(housing);
+    const eye = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.055, 0.025), lamp);
+    eye.position.set(side * 0.56, 0.67, -1.51);
+    eye.rotation.z = side * 0.18;
+    body.add(eye);
+    const wing = new THREE.Shape();
+    wing.moveTo(0, 0);
+    wing.lineTo(0.45, 0.45);
+    wing.lineTo(1.15, 0.65);
+    wing.lineTo(0.94, 0.18);
+    wing.lineTo(0.62, 0.28);
+    wing.lineTo(0.45, 0.03);
+    wing.lineTo(0, 0);
+    const spoiler = new THREE.Mesh(
+      new THREE.ExtrudeGeometry(wing, { depth: 0.09, bevelEnabled: false }),
+      paint,
+    );
+    spoiler.position.set(side * 0.18, 1, 1.25);
+    spoiler.scale.x = side;
+    body.add(spoiler);
+  }
+  const occupant = createDriver(driver, color, parts, own);
+  body.add(occupant.driver);
+  return { group, body, ...occupant, wheels, flames, paint };
 }
 
 function createMushroom(own: THREE.Material[], geometries: THREE.BufferGeometry[]) {
   const geometry = <T extends THREE.BufferGeometry>(g: T) => (geometries.push(g), g);
   const material = (color: number, emissive = 0) => {
-    const m = new THREE.MeshStandardMaterial({ color, roughness: 0.45, emissive, emissiveIntensity: 0.35 });
+    const m = new THREE.MeshStandardMaterial({
+      color,
+      roughness: 0.45,
+      emissive,
+      emissiveIntensity: 0.35,
+    });
     own.push(m);
     return m;
   };
   const group = new THREE.Group();
-  const cap = new THREE.Mesh(geometry(new THREE.SphereGeometry(0.9, 24, 16, 0, Math.PI * 2, 0, Math.PI / 2)), material(0xe8202a, 0x500000));
+  const cap = new THREE.Mesh(
+    geometry(new THREE.SphereGeometry(0.9, 24, 16, 0, Math.PI * 2, 0, Math.PI / 2)),
+    material(0xe8202a, 0x500000),
+  );
   cap.scale.set(1, 0.85, 1);
   cap.position.y = 0.9;
   group.add(cap);
@@ -254,12 +372,24 @@ function createMushroom(own: THREE.Material[], geometries: THREE.BufferGeometry[
     const angle = (i / 5) * Math.PI * 2;
     const tilt = i === 5 ? 0 : 0.9;
     const spot = new THREE.Mesh(geometry(new THREE.SphereGeometry(0.24, 12, 8)), white);
-    spot.position.set(Math.sin(tilt) * Math.cos(angle) * 0.82, 0.9 + Math.cos(tilt) * 0.72, Math.sin(tilt) * Math.sin(angle) * 0.82);
+    spot.position.set(
+      Math.sin(tilt) * Math.cos(angle) * 0.82,
+      0.9 + Math.cos(tilt) * 0.72,
+      Math.sin(tilt) * Math.sin(angle) * 0.82,
+    );
     spot.scale.set(1, 0.45, 1);
-    spot.lookAt(spot.position.clone().multiplyScalar(2).setY(spot.position.y * 2 - 0.9));
+    spot.lookAt(
+      spot.position
+        .clone()
+        .multiplyScalar(2)
+        .setY(spot.position.y * 2 - 0.9),
+    );
     group.add(spot);
   }
-  const stem = new THREE.Mesh(geometry(new THREE.CylinderGeometry(0.48, 0.55, 0.9, 20)), material(0xf5e6c8));
+  const stem = new THREE.Mesh(
+    geometry(new THREE.CylinderGeometry(0.48, 0.55, 0.9, 20)),
+    material(0xf5e6c8),
+  );
   stem.position.y = 0.48;
   group.add(stem);
   const black = material(0x111111);
@@ -273,8 +403,8 @@ function createMushroom(own: THREE.Material[], geometries: THREE.BufferGeometry[
 }
 
 const RACERS: { color: number; driver: Driver }[] = [
-  { color: 0xe82030, driver: "cap" },
-  { color: 0x2fbf4a, driver: "cap" },
+  { color: 0xff6c18, driver: "pumpkin" },
+  { color: 0x9a55ed, driver: "witch" },
   { color: 0xff8a10, driver: "pumpkin" },
   { color: 0xe8e4ff, driver: "ghost" },
   { color: 0x7a2cff, driver: "witch" },
@@ -296,10 +426,16 @@ export type RaceInput = {
   distance: number;
   steer: number;
   density: number;
+  dance: MusicDance;
+  danceAmount: number;
 };
 
 /** The race on Rainbow Road: the player's kart, rivals, items and all the effects. */
-export function createRace(parent: THREE.Group, camera: THREE.PerspectiveCamera, host: HTMLCanvasElement) {
+export function createRace(
+  parent: THREE.Group,
+  camera: THREE.PerspectiveCamera,
+  host: HTMLCanvasElement,
+) {
   const materials: THREE.Material[] = [];
   const parts = kartParts();
   const geometries: THREE.BufferGeometry[] = [...parts.geometries];
@@ -307,11 +443,17 @@ export function createRace(parent: THREE.Group, camera: THREE.PerspectiveCamera,
   const starMap = starTexture();
   const textures = [flameMap, starMap];
   const additive = (map: THREE.Texture, color = 0xffffff) => {
-    const m = new THREE.SpriteMaterial({ map, color, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true });
+    const m = new THREE.SpriteMaterial({
+      map,
+      color,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      transparent: true,
+    });
     materials.push(m);
     return m;
   };
-  const flame = additive(flameMap);
+  const flame = additive(flameMap, 0x77ffe1);
   materials.push(parts.rubber, parts.chrome, parts.dark);
 
   const player = createKart(parts, RACERS[0]!.color, RACERS[0]!.driver, flame, materials);
@@ -333,10 +475,20 @@ export function createRace(parent: THREE.Group, camera: THREE.PerspectiveCamera,
   const shellGeometry = new THREE.SphereGeometry(0.55, 18, 10, 0, Math.PI * 2, 0, Math.PI / 2);
   const rimGeometry = new THREE.TorusGeometry(0.56, 0.12, 8, 20).rotateX(Math.PI / 2);
   geometries.push(shellGeometry, rimGeometry);
-  const shellMaterial = new THREE.MeshStandardMaterial({ color: 0x22c040, roughness: 0.3, emissive: 0x0a4010 });
+  const shellMaterial = new THREE.MeshStandardMaterial({
+    color: 0x22c040,
+    roughness: 0.3,
+    emissive: 0x0a4010,
+  });
   const rimMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.4 });
   materials.push(shellMaterial, rimMaterial);
-  type Shell = { mesh: THREE.Group; rel: number; lateral: number; target: (typeof rivals)[number] | null; age: number };
+  type Shell = {
+    mesh: THREE.Group;
+    rel: number;
+    lateral: number;
+    target: (typeof rivals)[number] | null;
+    age: number;
+  };
   const shells: Shell[] = [];
   const pendingShots: number[] = [];
   const throwShell = (from: number, lateral: number) => {
@@ -345,14 +497,24 @@ export function createRace(parent: THREE.Group, camera: THREE.PerspectiveCamera,
         .filter((r) => r.offset > from + 4 && r.offset < from + 90 && r.spin <= 0)
         .sort((a, b) => a.offset - b.offset)[0] ?? null;
     const mesh = new THREE.Group();
-    mesh.add(new THREE.Mesh(shellGeometry, shellMaterial), new THREE.Mesh(rimGeometry, rimMaterial));
+    mesh.add(
+      new THREE.Mesh(shellGeometry, shellMaterial),
+      new THREE.Mesh(rimGeometry, rimMaterial),
+    );
     parent.add(mesh);
     shells.push({ mesh, rel: from + 2, lateral, target, age: 0 });
   };
 
   // Stars burst from a kart that gets hit.
   const starMaterial = additive(starMap, 0xffffff);
-  const bursts: { sprite: THREE.Sprite; rel: number; lateral: number; velocity: THREE.Vector3; age: number; owner: (typeof rivals)[number] }[] = [];
+  const bursts: {
+    sprite: THREE.Sprite;
+    rel: number;
+    lateral: number;
+    velocity: THREE.Vector3;
+    age: number;
+    owner: (typeof rivals)[number];
+  }[] = [];
   const spinOut = (rival: (typeof rivals)[number]) => {
     rival.spin = 1.1;
     for (let k = 0; k < 6; k++) {
@@ -360,7 +522,18 @@ export function createRace(parent: THREE.Group, camera: THREE.PerspectiveCamera,
       sprite.scale.setScalar(0.8);
       parent.add(sprite);
       const angle = (k / 6) * Math.PI * 2;
-      bursts.push({ sprite, rel: 0, lateral: 0, velocity: new THREE.Vector3(Math.cos(angle) * 3, 4 + Math.random() * 2, Math.sin(angle) * 3), age: 0, owner: rival });
+      bursts.push({
+        sprite,
+        rel: 0,
+        lateral: 0,
+        velocity: new THREE.Vector3(
+          Math.cos(angle) * 3,
+          4 + Math.random() * 2,
+          Math.sin(angle) * 3,
+        ),
+        age: 0,
+        owner: rival,
+      });
     }
   };
 
@@ -380,8 +553,14 @@ export function createRace(parent: THREE.Group, camera: THREE.PerspectiveCamera,
   const sparkPositions = new Float32Array(SPARKS * 3);
   const sparkColors = new Float32Array(SPARKS * 3);
   const sparkGeometry = new THREE.BufferGeometry();
-  sparkGeometry.setAttribute("position", new THREE.BufferAttribute(sparkPositions, 3).setUsage(THREE.DynamicDrawUsage));
-  sparkGeometry.setAttribute("color", new THREE.BufferAttribute(sparkColors, 3).setUsage(THREE.DynamicDrawUsage));
+  sparkGeometry.setAttribute(
+    "position",
+    new THREE.BufferAttribute(sparkPositions, 3).setUsage(THREE.DynamicDrawUsage),
+  );
+  sparkGeometry.setAttribute(
+    "color",
+    new THREE.BufferAttribute(sparkColors, 3).setUsage(THREE.DynamicDrawUsage),
+  );
   geometries.push(sparkGeometry);
   const sparkMaterial = new THREE.PointsMaterial({
     size: 0.35,
@@ -395,7 +574,13 @@ export function createRace(parent: THREE.Group, camera: THREE.PerspectiveCamera,
   const sparkPoints = new THREE.Points(sparkGeometry, sparkMaterial);
   sparkPoints.frustumCulled = false;
   parent.add(sparkPoints);
-  const sparks = Array.from({ length: SPARKS }, () => ({ position: new THREE.Vector3(), velocity: new THREE.Vector3(), age: 1, life: 1, color: new THREE.Color() }));
+  const sparks = Array.from({ length: SPARKS }, () => ({
+    position: new THREE.Vector3(),
+    velocity: new THREE.Vector3(),
+    age: 1,
+    life: 1,
+    color: new THREE.Color(),
+  }));
   let nextSpark = 0;
   let driftTime = 0;
 
@@ -403,9 +588,18 @@ export function createRace(parent: THREE.Group, camera: THREE.PerspectiveCamera,
   const LINES = 140;
   const linePositions = new Float32Array(LINES * 6);
   const lineGeometry = new THREE.BufferGeometry();
-  lineGeometry.setAttribute("position", new THREE.BufferAttribute(linePositions, 3).setUsage(THREE.DynamicDrawUsage));
+  lineGeometry.setAttribute(
+    "position",
+    new THREE.BufferAttribute(linePositions, 3).setUsage(THREE.DynamicDrawUsage),
+  );
   geometries.push(lineGeometry);
-  const lineMaterial = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false });
+  const lineMaterial = new THREE.LineBasicMaterial({
+    color: 0xffffff,
+    transparent: true,
+    opacity: 0,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
   materials.push(lineMaterial);
   const speedLines = new THREE.LineSegments(lineGeometry, lineMaterial);
   speedLines.frustumCulled = false;
@@ -443,9 +637,18 @@ export function createRace(parent: THREE.Group, camera: THREE.PerspectiveCamera,
   const tmp = new THREE.Vector3();
 
   /** Pose an object on the road at a distance and sideways offset, facing down the road. */
-  const poseOnRoad = (object: THREE.Object3D, course: Course, distance: number, lateral: number, lift = 0) => {
+  const poseOnRoad = (
+    object: THREE.Object3D,
+    course: Course,
+    distance: number,
+    lateral: number,
+    lift = 0,
+  ) => {
     courseFrame(course, indexAtDistance(course, distance), frame);
-    object.position.copy(frame.point).addScaledVector(frame.right, lateral).addScaledVector(frame.up, lift);
+    object.position
+      .copy(frame.point)
+      .addScaledVector(frame.right, lateral)
+      .addScaledVector(frame.up, lift);
     basis.makeBasis(frame.right, frame.up, back.copy(frame.tangent).negate());
     object.quaternion.setFromRotationMatrix(basis);
     return frame;
@@ -472,14 +675,23 @@ export function createRace(parent: THREE.Group, camera: THREE.PerspectiveCamera,
       shells.length = 0;
     },
     update(input: RaceInput) {
-      const { course, songTime, time, dt, distance, steer } = input;
+      const { course, songTime, time, dt, distance, steer, dance, danceAmount } = input;
+      const groove = (kart: Kart, side: number) => {
+        kart.body.position.y += dance.bounce * danceAmount * 0.16;
+        kart.body.rotation.z = side * dance.sway * danceAmount * 0.075;
+        kart.driver.rotation.y = dance.twist * danceAmount * 0.12;
+        kart.head.rotation.x = dance.nod * danceAmount * 0.18;
+        kart.head.rotation.z = -side * dance.sway * danceAmount * 0.12;
+      };
       const index = indexAtDistance(course, distance);
       const i = Math.min(course.count - 1, Math.floor(songTime * COURSE_RATE));
       const boost = course.boost[i] ?? 0;
       const star = course.stars.some((s) => songTime >= s.start && songTime < s.end) ? 1 : 0;
       state.boost += (boost - state.boost) * (1 - Math.exp(-dt * 8));
       state.star += (star - state.star) * (1 - Math.exp(-dt * 6));
-      const speed = ((course.distance[Math.min(course.count - 1, i + 1)] ?? 0) - (course.distance[i] ?? 0)) * COURSE_RATE;
+      const speed =
+        ((course.distance[Math.min(course.count - 1, i + 1)] ?? 0) - (course.distance[i] ?? 0)) *
+        COURSE_RATE;
 
       // How hard the road is turning just ahead decides the drift.
       courseFrame(course, index, frame);
@@ -492,7 +704,8 @@ export function createRace(parent: THREE.Group, camera: THREE.PerspectiveCamera,
       rolled += speed * dt;
       poseOnRoad(player.group, course, distance, steer, 0);
       player.body.rotation.y = THREE.MathUtils.clamp(turn * 3, -0.45, 0.45);
-      player.body.position.y = Math.abs(Math.sin(time * 18)) * 0.03 + (state.star > 0.5 ? Math.abs(Math.sin(time * 9)) * 0.2 : 0);
+      player.body.position.y = dance.bounce * danceAmount * state.star * 0.12;
+      groove(player, 1);
       spinWheels(player, rolled);
       starHue = (starHue + dt * 2.5) % 1;
       player.paint.emissive.setHSL(starHue, 1, 0.5).multiplyScalar(state.star * 0.9);
@@ -510,8 +723,16 @@ export function createRace(parent: THREE.Group, camera: THREE.PerspectiveCamera,
           const spark = sparks[nextSpark]!;
           nextSpark = (nextSpark + 1) % SPARKS;
           const side = n % 2 ? 1 : -1;
-          spark.position.copy(player.group.position).addScaledVector(frame.right, side * 1).addScaledVector(frame.up, 0.2).addScaledVector(frame.tangent, -1.3);
-          spark.velocity.copy(frame.tangent).multiplyScalar(speed * 0.8).addScaledVector(frame.right, side * (2 + Math.random() * 3)).addScaledVector(frame.up, 2 + Math.random() * 3);
+          spark.position
+            .copy(player.group.position)
+            .addScaledVector(frame.right, side * 1)
+            .addScaledVector(frame.up, 0.2)
+            .addScaledVector(frame.tangent, -1.3);
+          spark.velocity
+            .copy(frame.tangent)
+            .multiplyScalar(speed * 0.8)
+            .addScaledVector(frame.right, side * (2 + Math.random() * 3))
+            .addScaledVector(frame.up, 2 + Math.random() * 3);
           spark.age = 0;
           spark.life = 0.25 + Math.random() * 0.2;
           spark.color.set(orange ? 0xff8a20 : 0x40a8ff);
@@ -522,7 +743,10 @@ export function createRace(parent: THREE.Group, camera: THREE.PerspectiveCamera,
         const alive = spark.age < spark.life;
         if (alive) spark.position.addScaledVector(spark.velocity, dt);
         (alive ? spark.position : tmp.set(0, -1e5, 0)).toArray(sparkPositions, k * 3);
-        spark.color.clone().multiplyScalar(alive ? 1 - spark.age / spark.life : 0).toArray(sparkColors, k * 3);
+        spark.color
+          .clone()
+          .multiplyScalar(alive ? 1 - spark.age / spark.life : 0)
+          .toArray(sparkColors, k * 3);
       });
       sparkGeometry.attributes.position!.needsUpdate = true;
       sparkGeometry.attributes.color!.needsUpdate = true;
@@ -530,7 +754,10 @@ export function createRace(parent: THREE.Group, camera: THREE.PerspectiveCamera,
       // Rivals jostle around the player; a boost or star leaves them behind, and they catch up again.
       const gain = state.boost * 22 + state.star * 6;
       for (const rival of rivals) {
-        let pace = 3 * Math.sin(time * 0.31 + rival.seed) + 2.5 * Math.sin(time * 0.73 + rival.seed * 2) - gain;
+        let pace =
+          3 * Math.sin(time * 0.31 + rival.seed) +
+          2.5 * Math.sin(time * 0.73 + rival.seed * 2) -
+          gain;
         if (rival.offset > 110) pace -= 6;
         if (rival.offset < -45) pace += 9;
         if (rival.spin > 0) pace -= 20;
@@ -548,12 +775,18 @@ export function createRace(parent: THREE.Group, camera: THREE.PerspectiveCamera,
         rival.spin = Math.max(0, rival.spin - dt);
         rival.bump = Math.max(0, rival.bump - dt);
         const at = distance + rival.offset;
-        rival.kart.group.visible = at > 0 && at < (course.distance[course.count - 1] ?? 0) && rival.offset > -5;
+        rival.kart.group.visible =
+          at > 0 && at < (course.distance[course.count - 1] ?? 0) && rival.offset > -5;
         if (!rival.kart.group.visible) continue;
         poseOnRoad(rival.kart.group, course, at, rival.lateral, 0);
         const spinning = rival.spin > 0;
-        rival.kart.body.rotation.y = spinning ? (1 - rival.spin / 1.1) * Math.PI * 4 : Math.sin(time * 2 + rival.seed) * 0.08;
-        rival.kart.body.position.y = spinning ? Math.sin((rival.spin / 1.1) * Math.PI) * 0.8 : Math.abs(Math.sin(time * 17 + rival.seed)) * 0.03;
+        rival.kart.body.rotation.y = spinning
+          ? (1 - rival.spin / 1.1) * Math.PI * 4
+          : dance.twist * danceAmount * 0.08;
+        rival.kart.body.position.y = spinning
+          ? Math.sin((rival.spin / 1.1) * Math.PI) * 0.8
+          : 0;
+        groove(rival.kart, rival.seed % 2 ? -1 : 1);
         spinWheels(rival.kart, rolled + rival.seed);
         for (const sprite of rival.kart.flames) sprite.visible = false;
       }
@@ -575,7 +808,8 @@ export function createRace(parent: THREE.Group, camera: THREE.PerspectiveCamera,
         shell.rel += 48 * dt;
         if (shell.target) {
           const remaining = shell.target.offset - shell.rel;
-          shell.lateral += (shell.target.lateral - shell.lateral) * (1 - Math.exp(-dt * (remaining < 20 ? 8 : 2)));
+          shell.lateral +=
+            (shell.target.lateral - shell.lateral) * (1 - Math.exp(-dt * (remaining < 20 ? 8 : 2)));
           if (remaining <= 0.8) {
             spinOut(shell.target);
             shell.mesh.removeFromParent();
@@ -600,7 +834,10 @@ export function createRace(parent: THREE.Group, camera: THREE.PerspectiveCamera,
           continue;
         }
         const owner = burst.owner.kart.group;
-        burst.sprite.position.copy(owner.position).add(tmp.copy(burst.velocity).multiplyScalar(burst.age)).addScaledVector(frame.up, 1.5 - burst.age * burst.age * 3);
+        burst.sprite.position
+          .copy(owner.position)
+          .add(tmp.copy(burst.velocity).multiplyScalar(burst.age))
+          .addScaledVector(frame.up, 1.5 - burst.age * burst.age * 3);
         burst.sprite.scale.setScalar(0.9 * (1 - burst.age / 0.9) + 0.2);
       }
 
@@ -663,7 +900,8 @@ export function createRace(parent: THREE.Group, camera: THREE.PerspectiveCamera,
       for (const m of materials) m.dispose();
       for (const t of textures) t.dispose();
       player.group.traverse((o) => o instanceof THREE.Mesh && o.geometry.dispose());
-      for (const rival of rivals) rival.kart.group.traverse((o) => o instanceof THREE.Mesh && o.geometry.dispose());
+      for (const rival of rivals)
+        rival.kart.group.traverse((o) => o instanceof THREE.Mesh && o.geometry.dispose());
     },
   };
 }

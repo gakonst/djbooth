@@ -1,3 +1,4 @@
+import { createDanceMotion, type MusicDance } from "../../../dj-monitor/src/music-dance.js";
 import * as THREE from "three";
 import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
@@ -18,10 +19,10 @@ const LOOK_AHEAD = 9;
 
 // The song's mood picks the palette: calm, bass-heavy, vocal/melodic, then bright and airy.
 const MOODS = [
-  [0x2a3cff, 0x7a4dff, 0x22d3c5],
-  [0xff2d55, 0xff7a1a, 0xff3d9a],
-  [0xff3d9a, 0xb44dff, 0xff8fc8],
-  [0x3de0ff, 0x8cffd9, 0xdde8ff],
+  [0x79529e, 0x4d7191, 0x57a38b],
+  [0xc94926, 0xe7a447, 0x9e405f],
+  [0xa46b93, 0x8056a4, 0xd3ac7b],
+  [0x78a697, 0xafba8a, 0xe4d8b7],
 ].map((mood) => mood.map((hex) => new THREE.Color(hex)));
 
 /** The tunnel's centre line at distance s: two slow, out-of-step sweeps make it swirl. */
@@ -88,12 +89,15 @@ void main() {
     color += vAccent * smoothstep(.025, 0., abs(r - 1.14)) * (.7 + vHits.x * .4);
     color *= .7 + .3 * smoothstep(1.3, 1.22, r);
   } else {
-    float groove = .5 + .5 * sin(r * 260.);
+    float groove = .5 + .5 * sin(r * 460. + sin(turned * 5.) * .3);
+    float scratches = pow(.5 + .5 * sin(turned * 237. + r * 9.), 90.);
+    float dust = step(.992, hash(floor(vec2(turned * 320., r * 300.))));
     float gap = smoothstep(.035, 0., abs(fract((r - 1.3) / .68 * 5.) - .5) - .46);
     // The sheen stays put while the record turns beneath it.
     float sheen = pow(abs(cos(a - .8)), 24.) * .55 + pow(abs(cos(a + .7)), 40.) * .3;
     float wave = vWave.x * (.5 + .5 * sin(turned * 5. + r * 22. + vWave.y));
     color = vec3(.03, .02, .04) + vec3(.9, .85, 1.) * sheen * (.22 + .18 * groove) * (1. - gap * .6);
+    color += vec3(.24,.18,.12) * (scratches * .2 + dust * .5);
     color += vAccent * wave * smoothstep(.35, 1., groove) * .8;
     // Snares flash the grooves; hats scatter glints across them.
     color += mix(vAccent, vec3(1.), .25) * vHits.y * smoothstep(.2, 1., groove) * (1. - gap) * .4;
@@ -103,6 +107,31 @@ void main() {
   }
   float alpha = .84 * smoothstep(hole, hole + .02, r) * smoothstep(2., 1.985, r);
   gl_FragColor = vec4(color * fade, alpha * fade);
+}`;
+
+// Engraved bronze reliquary portals: an opaque body beneath thin emissive inlays.
+const RELIQUARY_FRAGMENT = /* glsl */ `
+varying vec2 vPos, vWave;
+varying vec3 vColor, vAccent;
+varying vec4 vParams, vHits;
+void main() {
+  float r = length(vPos), a = atan(vPos.y, vPos.x);
+  if (r < 1.025 || r > 1.28) discard;
+  float radial = (r - 1.025) / .255;
+  float bevel = pow(max(0., sin(radial * 3.14159)), .4);
+  float grain = .5 + .5 * sin(a * 417. + sin(r * 910.) * 2.);
+  float flutes = .5 + .5 * cos(a * 64.);
+  float light = .35 + .65 * max(0., cos(a - 2.1));
+  vec3 bronze = mix(vec3(.06,.035,.045), vec3(.36,.22,.10), bevel * light);
+  bronze *= .8 + grain * .12 + flutes * .08;
+  float trim = exp(-abs(r - 1.045) * 260.) + exp(-abs(r - 1.255) * 260.);
+  float segment = fract((a + 3.14159) / 6.28318 * 32.);
+  float rune = (1. - smoothstep(.025,.06,abs(segment-.5))) * step(1.10,r) * step(r,1.21);
+  rune += (1. - smoothstep(.008,.018,abs(r-1.15-abs(segment-.5)*.12))) * step(.2,segment) * step(segment,.8);
+  float rivet = exp(-pow((segment-.5)*12.,2.) - pow((r-1.24)*130.,2.));
+  vec3 color = bronze + vAccent * trim * .42 + vColor * rune * (.18 + vHits.x * .16);
+  color += vec3(.75,.48,.22) * rivet * light;
+  gl_FragColor = vec4(color * vParams.x, vParams.x);
 }`;
 
 const EYE_FRAGMENT = /* glsl */ `
@@ -125,7 +154,9 @@ void main() {
   if (r < irisR) {
     // Iris fibres drift slowly, with a glowing rim around the pupil we fly into.
     float streak = .5 + .5 * sin(a * 38. + sin(a * 7. + spin) * 2.);
-    float fibre = .5 + .5 * sin(a * 90. + r * 6. + vWave.y);
+    float fibre = .5 + .5 * sin(a * 190. + r * 16. + vWave.y + sin(a * 43.) * 2.);
+    float crypts = pow(.5 + .5 * sin(a * 63. + sin(r * 31.)), 7.);
+    streak *= .65 + .35 * crypts;
     color = mix(vColor, vAccent, smoothstep(pupil, irisR, r) * .8 + streak * .2);
     color *= .55 + .45 * streak * fibre + vWave.x * .3;
     // Snares flare the iris outward from the pupil.
@@ -133,11 +164,14 @@ void main() {
     color += vAccent * smoothstep(.14, 0., r - pupil) * (1.3 + vHits.x * .6);
     color *= mix(.35, 1., smoothstep(irisR, irisR - .25, r));
   } else {
-    vec3 sclera = mix(vec3(.6, .58, .68), vColor, .15);
+    vec3 sclera = mix(vec3(.25, .22, .29), vColor, .25);
     float veins = smoothstep(.8, 1., sin(a * 13. + sin(r * 5. + a * 3.) * 1.5)) * smoothstep(irisR + .2, width, r);
     color = mix(sclera, vec3(.8, .05, .08), veins * halloween * .85);
     color *= .5 + .5 * smoothstep(lid, lid * .35, abs(p.y));
   }
+  // A wet corneal reflection stays anchored to the light, over the rotating fibres.
+  vec2 highlight = (p - vec2(-.65,.8)) / vec2(.36,.17);
+  color += vec3(.9,.85,.7) * exp(-dot(highlight,highlight)*3.) * .6;
   // Hats glint along the lids; bar starts make the whole outline blaze.
   float glint = pow(.5 + .5 * sin(p.x * 9. + spin * 6.), 12.) * vHits.z;
   color = mix(color, vColor * (1.6 + vHits.w * .3) + glint * .5, edge);
@@ -151,10 +185,13 @@ export async function createInfiniteRings(
   host: HTMLCanvasElement,
   shape: TunnelShape = "rings",
 ): Promise<SceneEngine> {
-  const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+  const renderer = new THREE.WebGLRenderer({
+    antialias: true,
+    powerPreference: "high-performance",
+  });
   renderer.domElement.setAttribute("aria-hidden", "true");
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.2;
+  renderer.toneMappingExposure = 0.88;
   renderer.setClearColor(0x030008, 1);
   host.after(renderer.domElement);
 
@@ -211,13 +248,14 @@ export async function createInfiniteRings(
       side: THREE.DoubleSide,
       uniforms: { halloween: { value: 1 } },
       vertexShader: FACE_VERTEX,
-      fragmentShader: shape === "eyes" ? EYE_FRAGMENT : VINYL_FRAGMENT,
+      fragmentShader:
+        shape === "eyes" ? EYE_FRAGMENT : shape === "rings" ? RELIQUARY_FRAGMENT : VINYL_FRAGMENT,
     }),
   );
   const faces = new THREE.InstancedMesh(faceGeometry, faceMaterial, RINGS);
   faces.frustumCulled = false;
   faces.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-  faces.visible = shape !== "rings";
+  faces.visible = true;
   rings.visible = dots.visible = shape === "rings";
   scene.add(faces);
   const depths = new Float32Array(RINGS);
@@ -283,7 +321,12 @@ export async function createInfiniteRings(
   for (let i = 0; i < SKY_STARS; i++) {
     direction.randomDirection().multiplyScalar(220);
     skyPosition.setXYZ(i, direction.x, direction.y, direction.z);
-    skyStar.setXYZ(i, 8 + Math.pow(Math.random(), 5) * 40, Math.random() * 40, 0.5 + Math.random() * 0.5);
+    skyStar.setXYZ(
+      i,
+      8 + Math.pow(Math.random(), 5) * 40,
+      Math.random() * 40,
+      0.5 + Math.random() * 0.5,
+    );
   }
   const drift = starField(STARS);
   const driftPosition = drift.getAttribute("position") as THREE.BufferAttribute;
@@ -301,9 +344,11 @@ export async function createInfiniteRings(
 
   const composer = new EffectComposer(renderer);
   composer.addPass(new RenderPass(scene, camera));
-  const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 1, 0.55, 0.1);
+  // Only emissive inlays should bloom; including the broad iris/vinyl surfaces
+  // washes the entire tunnel white as dozens of transparent faces overlap.
+  const bloom = keep(new UnrealBloomPass(new THREE.Vector2(1, 1), 0.28, 0.35, 0.85));
   composer.addPass(bloom);
-  composer.addPass(new OutputPass());
+  composer.addPass(keep(new OutputPass()));
 
   const reduced = matchMedia("(prefers-reduced-motion: reduce)");
   let target: VisualLook = { ...DEFAULT_VISUAL_LOOK };
@@ -358,14 +403,20 @@ export async function createInfiniteRings(
     return (values[i] = values[i]! + (value - values[i]!) * (1 - Math.exp(-dt * rate)));
   };
   // Only the hits that stand out: the main kicks and backbeats, not every ghost note.
-  const significant = (value: number, from: number) => THREE.MathUtils.smoothstep(value, from, 0.95);
+  const significant = (value: number, from: number) =>
+    THREE.MathUtils.smoothstep(value, from, 0.95);
   // Without a waveform, fall back to the live bass and a ripple per beat.
   let bassAverage = 0,
     kick = 0,
     beatAge = Infinity,
     beatStrength = 0;
 
+  let suppliedDance: MusicDance | undefined;
+  const fallbackDance = createDanceMotion();
   return {
+    setDance(next) {
+      suppliedDance = next;
+    },
     setLook(next) {
       target = next;
     },
@@ -407,6 +458,12 @@ export async function createInfiniteRings(
       const low = Math.min(1, Math.max(0, energy[e + 1] ?? 0));
       const mid = Math.min(1, Math.max(0, energy[e + 2] ?? 0));
       const high = Math.min(1, Math.max(0, energy[e + 3] ?? 0));
+      const dance =
+        suppliedDance ??
+        fallbackDance.update(motion[e + 3] ?? 0, energy[e] ?? 0, low, mid, high, dt);
+      const danceAmount = reduced.matches
+        ? 0
+        : Math.min(1.5, Math.max(0, look.motion * look.intensity));
       // Read the moment's mood from loudness and band balance, then drift there over seconds.
       const calm = 1 - THREE.MathUtils.smoothstep(level, 0.2, 0.6);
       const bands = low * 1.1 + mid + high * 1.6 + 1e-4;
@@ -455,13 +512,22 @@ export async function createInfiniteRings(
       }
       beatAge += dt;
       bassAverage += (low - bassAverage) * (1 - Math.exp(-dt * 1.5));
-      kick = Math.max(kick * Math.exp(-dt * 6), Math.min(1, Math.max(0, low - bassAverage * 1.08) * 6));
+      kick = Math.max(
+        kick * Math.exp(-dt * 6),
+        Math.min(1, Math.max(0, low - bassAverage * 1.08) * 6),
+      );
       if (!playing) kick = 0;
       const decay = Math.exp(-dt * 7);
       if (map && playing) {
         const from = songTime - Math.max(dt, 0.02);
-        kickNow = Math.max(kickNow * decay, significant(peakIn(map.kick, map, from, songTime), 0.55));
-        snareNow = Math.max(snareNow * decay, significant(peakIn(map.snare, map, from, songTime), 0.6));
+        kickNow = Math.max(
+          kickNow * decay,
+          significant(peakIn(map.kick, map, from, songTime), 0.55),
+        );
+        snareNow = Math.max(
+          snareNow * decay,
+          significant(peakIn(map.snare, map, from, songTime), 0.6),
+        );
         hatNow = Math.max(hatNow * decay, significant(peakIn(map.hat, map, from, songTime), 0.8));
         kick = Math.max(kick, kickNow);
       } else {
@@ -470,7 +536,8 @@ export async function createInfiniteRings(
         hatNow *= decay;
       }
       // Passages, not just loudness: breakdowns glide slowly, drops rush.
-      const drive = map && playing ? (map.section[Math.floor(songTime / map.step)] ?? level) : level;
+      const drive =
+        map && playing ? (map.section[Math.floor(songTime / map.step)] ?? level) : level;
       previousBeat = beat;
       previousLane = lane;
       burst *= Math.exp(-dt * 2.2);
@@ -495,7 +562,7 @@ export async function createInfiniteRings(
       camera.up.set(Math.sin(travel * 0.02 + t * 0.03) * 0.4, 1, 0).normalize();
       camera.lookAt(ahead);
       // Kicks punch the view in a touch, like being pressed into the hole.
-      camera.fov = 70 - punch * 2 - pulse * 0.8;
+      camera.fov = 70 - (punch * 2 + pulse * 0.8) * (reduced.matches ? 0 : 1);
       camera.updateProjectionMatrix();
 
       const brightness = (0.35 + drive * 0.5 + level * 0.2 + pulse * 0.3 + punch * 0.3) * intensity;
@@ -506,7 +573,8 @@ export async function createInfiniteRings(
       dotSpin += dt * damping * (0.2 + level * 0.3 + mid * 1.2);
       // Records turn faster when the bass takes over.
       vinylSpin += dt * damping * (0.5 + level * 0.8 + low * 1.6);
-      for (let i = 0; i < RINGS; i++) depths[i] = (((i * SPACING - travel) % DEPTH) + DEPTH) % DEPTH;
+      for (let i = 0; i < RINGS; i++)
+        depths[i] = (((i * SPACING - travel) % DEPTH) + DEPTH) % DEPTH;
       order.sort((a, b) => depths[b]! - depths[a]!);
       order.forEach((ring, slot) => (slots[ring] = slot));
       const dotCount = Math.round(DOTS_PER_RING * Math.max(0.15, look.density));
@@ -545,25 +613,50 @@ export async function createInfiniteRings(
         const hit = Math.max(ringKick, ringSnare * 0.8, ringHat * 0.3) * intensity;
         const radius =
           RADIUS *
-          (1 + pulse * 0.06 * (1 - u) + punch * 0.04 + ringKick * 0.12 + ringBeat * 0.03 + ringAmplitude * 0.1);
+          (1 +
+            pulse * 0.06 * (1 - u) +
+            punch * 0.04 +
+            ringKick * 0.12 +
+            ringBeat * 0.03 +
+            ringAmplitude * 0.1);
         const glow = brightness * (0.7 + hit * 0.6 + ringBeat * 0.2);
         const ripple = ringKick;
         center(s, point);
         center(s + 0.5, next);
         const x = point.x - here.x,
           y = point.y - here.y;
-        dummy.position.set(x, y, -depth);
+        // Alternating local ring gestures preserve the tunnel path and camera trajectory.
+        const gesture = danceAmount * (i % 2 ? 1 : -1);
+        dummy.position.set(
+          x + dance.sway * 0.09 * gesture,
+          y + dance.bounce * 0.08 * danceAmount,
+          -depth,
+        );
         // Each ring faces along the bend, so the tunnel walls read as one continuous curve.
-        dummy.rotation.set((next.y - point.y) * 2, -(next.x - point.x) * 2, i * 0.21 + t * 0.1);
+        dummy.rotation.set(
+          (next.y - point.y) * 2,
+          -(next.x - point.x) * 2,
+          i * 0.21 + t * 0.035 + dance.twist * 0.09 * gesture,
+        );
         // Snares squash a ring into an oval, as if it were struck.
-        dummy.scale.set(radius * (1 + ringSnare * 0.06), radius * (1 - ringSnare * 0.03), radius);
+        dummy.scale.set(
+          radius * (1 + ringSnare * 0.06 + dance.kick * 0.025 * danceAmount),
+          radius * (1 - ringSnare * 0.03 - dance.kick * 0.02 * danceAmount),
+          radius,
+        );
         dummy.updateMatrix();
         rings.setMatrixAt(i, dummy.matrix);
         const flow = i * 0.37 + hue + t * 0.04;
         paletteAt(palette, flow, color);
-        tint.setRGB((rgba[sample] ?? 0) / 255, (rgba[sample + 1] ?? 0) / 255, (rgba[sample + 2] ?? 0) / 255);
+        tint.setRGB(
+          (rgba[sample] ?? 0) / 255,
+          (rgba[sample + 1] ?? 0) / 255,
+          (rgba[sample + 2] ?? 0) / 255,
+        );
         // Snares and bar starts flash toward white; the song's own waveform colour shows through.
-        color.lerp(tint, 0.25 * level).lerp(white, Math.min(0.3, ringSnare * 0.2 + ringBeat * 0.1));
+        color
+          .lerp(tint, 0.08 * level)
+          .lerp(white, Math.min(0.12, ringSnare * 0.08 + ringBeat * 0.04));
         color.multiplyScalar(fade * glow * 1.5);
         rings.setColorAt(i, color);
 
@@ -571,12 +664,13 @@ export async function createInfiniteRings(
           const slot = slots[i]!;
           faces.setMatrixAt(slot, dummy.matrix);
           paletteAt(palette, flow, color);
-          color.lerp(tint, 0.25 * level).multiplyScalar(glow);
+          color.lerp(tint, 0.08 * level).multiplyScalar(glow * 0.48);
           faceAttributes.aColor.setXYZ(slot, color.r, color.g, color.b);
-          paletteAt(palette, flow + 1, color).multiplyScalar(glow);
+          paletteAt(palette, flow + 1, color).multiplyScalar(glow * 0.48);
           faceAttributes.aAccent.setXYZ(slot, color.r, color.g, color.b);
           // Eyes squeeze their pupils on each beat, then relax; the nearest stay wide for the fly-through.
-          const squeeze = Math.max(pulse * 0.08, ringKick * 0.2) * THREE.MathUtils.smoothstep(u, 0.05, 0.2);
+          const squeeze =
+            Math.max(pulse * 0.08, ringKick * 0.2) * THREE.MathUtils.smoothstep(u, 0.05, 0.2);
           // Distant eyes blink now and then; never one we are about to pass through.
           const wink = (t * 0.06 + i * 0.618) % 1;
           const open = depth > 20 && wink < 0.025 ? 1 - Math.sin((wink / 0.025) * Math.PI) : 1;
@@ -597,7 +691,8 @@ export async function createInfiniteRings(
           const angle = spin + (k / dotCount) * Math.PI * 2;
           // Dots ride just outside their ring, in the ring's own tilted frame.
           // Highs make the dots sparkle and swell.
-          const sparkle = 1 + (map ? ringHat * 0.6 : high * 0.5) * (0.5 + 0.5 * Math.sin(time * 3 + k * 2.1 + i));
+          const sparkle =
+            1 + (map ? ringHat * 0.6 : high * 0.5) * (0.5 + 0.5 * Math.sin(time * 3 + k * 2.1 + i));
           const size = 0.022 * (1 + pulse * 0.3 + ripple * 0.3) * (1 + (k % 3) * 0.3) * sparkle;
           dotMatrix
             .makeScale(size, size, size)
@@ -606,7 +701,9 @@ export async function createInfiniteRings(
           const slot = k * RINGS + i;
           dots.setMatrixAt(slot, dotMatrix);
           // Colours run around each ring as its dots spin.
-          paletteAt(palette, flow + 1 + (k / dotCount) * 3, color).multiplyScalar(fade * glow * 1.2 * sparkle);
+          paletteAt(palette, flow + 1 + (k / dotCount) * 3, color).multiplyScalar(
+            fade * glow * 1.2 * sparkle,
+          );
           dots.setColorAt(slot, color);
         }
       }
@@ -630,12 +727,14 @@ export async function createInfiniteRings(
           point.y - here.y + Math.sin(angle) * star.distance,
           -depth,
         );
-        const fade = THREE.MathUtils.smoothstep(depth, 0.5, 6) * (1 - THREE.MathUtils.smoothstep(depth, DEPTH * 0.7, DEPTH));
+        const fade =
+          THREE.MathUtils.smoothstep(depth, 0.5, 6) *
+          (1 - THREE.MathUtils.smoothstep(depth, DEPTH * 0.7, DEPTH));
         driftStar.setXYZ(i, star.size, star.phase, fade);
       });
       driftPosition.needsUpdate = true;
       driftStar.needsUpdate = true;
-      starMaterial.uniforms.time!.value = time;
+      starMaterial.uniforms.time!.value = reduced.matches ? 0 : t;
       starMaterial.uniforms.pixelRatio!.value = pixelRatio;
       starMaterial.uniforms.glow!.value =
         0.7 + intensity * 0.3 + pulse * 0.1 + punch * 0.2 + (map ? hatNow * 0.15 : high * 0.15);
@@ -644,8 +743,12 @@ export async function createInfiniteRings(
       core.position.set(point.x - here.x, point.y - here.y, -DEPTH);
       core.lookAt(camera.position);
       paletteAt(palette, hue, coreMaterial.uniforms.color!.value as THREE.Color);
-      coreMaterial.uniforms.strength!.value = (0.3 + level * 0.4 + pulse * 0.4 + low * 0.2) * intensity;
-      bloom.strength = 0.55 + intensity * 0.4 + pulse * 0.08 + punch * 0.12 + snareNow * 0.08;
+      coreMaterial.uniforms.strength!.value =
+        (0.3 + level * 0.4 + pulse * 0.4 + low * 0.2) * intensity;
+      bloom.strength =
+        0.16 +
+        Math.min(1.5, intensity) * 0.12 +
+        (reduced.matches ? 0 : pulse * 0.025 + punch * 0.03);
 
       composer.render(dt);
     },

@@ -7,5 +7,5 @@
     "sourceMap": true
   },
   "include": ["src"],
-  "exclude": ["test"]
+  "exclude": []
 }

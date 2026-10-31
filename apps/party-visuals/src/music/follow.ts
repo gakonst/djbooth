@@ -19,7 +19,7 @@ export function createMusicFollower() {
     if (!lane.trackId || !lane.waveform) return undefined;
     let song = songs.get(lane.trackId);
     if (!song) {
-      song = analyzeSong(lane.waveform, lane.bpm);
+      song = analyzeSong(lane.waveform, lane.sourceBpm ?? lane.bpm);
       songs.set(lane.trackId, song);
     }
     return song;
@@ -29,9 +29,13 @@ export function createMusicFollower() {
     idle,
     update(lanes: MusicLane[], clock: number, dt: number): Followed {
       // Another deck has to stay clearly louder for a moment to take over.
-      const loudness = lanes.map((lane) => (lane.playing && lane.waveform ? lane.level + 0.001 : 0));
+      const loudness = lanes.map((lane) =>
+        lane.playing && lane.waveform && lane.level > 0.008 ? lane.level : 0,
+      );
       let best = -1;
-      loudness.forEach((value, i) => value > 0 && (best < 0 || value > loudness[best]!) && (best = i));
+      loudness.forEach(
+        (value, i) => value > 0 && (best < 0 || value > loudness[best]!) && (best = i),
+      );
       const leading = loudness[leader] ?? 0;
       if (best >= 0 && best !== leader && (leading <= 0 || loudness[best]! > leading * 1.4)) {
         challengerSince ||= clock;
@@ -44,12 +48,16 @@ export function createMusicFollower() {
       const lane = lanes[leader];
       const song = lane ? songFor(lane) : undefined;
       // A paused deck holds the scene still where it is.
-      if (lane && song && (lane.playing || current.key === lane.trackId)) {
+      if (lane && song && ((lane.playing && lane.level > 0.008) || current.key === lane.trackId)) {
         let time = current.time;
         const drift = lane.time - time;
-        if (current.key !== lane.trackId || Math.abs(drift) > 0.5) time = lane.time;
-        else if (lane.playing) time += dt + drift * Math.min(1, dt * 1.5);
-        current = { key: lane.trackId!, song, time, playing: lane.playing };
+        const audible = lane.playing && lane.level > 0.008;
+        // A silent running deck is not a visual clock. Paused seeks still reposition the scene.
+        if (audible || !lane.playing) {
+          if (current.key !== lane.trackId || Math.abs(drift) > 0.5) time = lane.time;
+          else if (audible) time += dt + drift * Math.min(1, dt * 1.5);
+        }
+        current = { key: lane.trackId!, song, time, playing: audible };
       } else {
         idleTime += dt;
         current = { key: "idle", song: idle, time: idleTime % idle.duration, playing: true };

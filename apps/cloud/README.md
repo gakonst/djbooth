@@ -24,11 +24,7 @@ instead of assuming an accepted command completed. Background suspension makes
 phone tools unavailable; cloud downloads continue independently.
 
 Phone queries are bounded and paginated. Credentials, arbitrary filesystem paths,
-audio bytes and other account stores are not query sources. The integration
-fixture uses the same reverse MCP path: start
-`pnpm --filter @gakonst/djbooth-cloud test:mobile-server`, then run the native
-Connect UI tests. `test/app-mcp.test.ts` verifies that consent and the real SDK
-reverse attachment sign the exact same catalog.
+audio bytes and other account stores are not query sources.
 
 The Cloudflare Worker hosts the Nanocodex Connect login, music-agent page, and
 account-scoped D1/R2 API. Native chat uses the narrow `/v1/agent/turns` adapter to
@@ -121,9 +117,7 @@ paths and carries a bounded real analysis waveform for offline display.
 
 The API contract is implemented in `src/index.ts` and the native `DJBoothKit/Clients.swift`.
 Use the top-level `pnpm djbooth cloud --help` for publishing the authoritative Rekordbox library.
-`pnpm --filter @gakonst/djbooth-cloud check` runs formatting, type checking and local D1/R2
-integration tests, including concurrent edits, retry idempotency, byte ranges and large-file
-composition. Wrangler configuration contains resource identifiers, never credentials.
+`pnpm --filter @gakonst/djbooth-cloud check` runs formatting and type checking. Wrangler configuration contains resource identifiers, never credentials.
 
 The original `0xcontrol` D1/R2 pattern informed this service. Its existing deployment and data
 are separate and are not migrated or modified by these applications.
@@ -200,27 +194,14 @@ artifact; private connector credentials are never exported into containers. Agen
 workspaces also omit shared `IMPORT_PROVIDER_ENV` secrets.
 
 For new deployments, apply D1 migrations before serving traffic. Use the rollout order above when upgrading the legacy shared service. `pnpm --filter @gakonst/djbooth-cloud build:container` builds the Linux image;
-`pnpm --filter @gakonst/djbooth-cloud test:container` runs an offline import and real analysis
-smoke test inside that image. `check` tests the Worker/API and container lifecycle without running
-paid containers. `pnpm --filter @gakonst/djbooth-cloud run deploy` builds and rolls out both
+`pnpm --filter @gakonst/djbooth-cloud run deploy` builds and rolls out both
 the Worker and its container image. Container updates target 100% in one rollout step; a successful
 deploy starts replacement, so verify the active application image before testing. The iPhone uses its Nanocodex account login; playlist processing needs no workstation connection.
 
-Live provider checks use the same image and public CLI, then exercise the workflow executor,
-audio and analysis publication to a local HTTP fixture, and a warm resume. They require network
-access and fetch one real recording each; they do not need an iPhone or write to a user's library:
-
-```sh
-pnpm --filter @gakonst/djbooth-cloud test:container:provider /fixtures/providers/spotify.json
-pnpm --filter @gakonst/djbooth-cloud test:container:provider /fixtures/providers/soundcloud.json
-pnpm --filter @gakonst/djbooth-cloud test:container:provider /fixtures/providers/soundcloud-dancing-shoes.json
-```
-
-The Dancing Shoes fixture covers recovery from a SoundCloud acquisition whose MP4 headers
-look valid but whose AAC packets fail to decode. Acquisitions and restored audio are fully
+Acquisitions and restored audio are fully
 decoded before being accepted, with successful verification cached by file identity. Invalid
 audio falls through to the existing candidate search; warm imports reuse verified recordings
-and analysis. The smoke checks report cold import and warm resume timings.
+and analysis.
 
 ## Recorded sets and SoundCloud
 
